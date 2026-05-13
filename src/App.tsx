@@ -33,10 +33,11 @@ import {
 
 type Phase = 'answering' | 'reveal' | 'result'
 type AppMode = 'normal' | 'daily'
+type Screen = 'home' | 'playing'
 
 const ALL_MODES: Mode[] = ['name-to-ui', 'ui-to-name', 'input-name']
 
-const DAILY_LENGTH = 20
+const DAILY_LENGTH = 10
 
 const MODE_LABEL: Record<Mode, string> = {
   'name-to-ui': '名前→UI',
@@ -186,6 +187,7 @@ export default function App() {
   const [session, setSession] = useState<Session>(() => initialSession(settings.sessionLength))
   const [lastResult, setLastResult] = useState<SessionResult | null>(null)
   const [appMode, setAppMode] = useState<AppMode>('normal')
+  const [screen, setScreen] = useState<Screen>('home')
   const [dailyQuestions, setDailyQuestions] = useState<Question[]>([])
   const [dailyAlreadyDone, setDailyAlreadyDone] = useState(false)
   const recentIdsRef = useRef<string[]>([])
@@ -243,12 +245,14 @@ export default function App() {
     setLastResult(null)
   }
 
-  // Load first question on mount and whenever settings change (normal mode only).
+  // Load first question whenever a normal-mode play session starts (or settings
+  // change mid-play). Home screen never auto-loads — the user picks a quiz
+  // from HomeView, which flips `screen` to 'playing'.
   useEffect(() => {
-    if (appMode !== 'normal') return
+    if (appMode !== 'normal' || screen !== 'playing') return
     recentIdsRef.current = []
     next()
-  }, [next, appMode])
+  }, [next, appMode, screen])
 
   const restartSession = useCallback(() => {
     if (appMode === 'daily') {
@@ -294,18 +298,47 @@ export default function App() {
       startedAt: Date.now(),
     })
     setLastResult(null)
+    setScreen('playing')
     showQuestion(questions[0])
   }, [today, daily.lastCompleted, showQuestion])
 
-  const exitDaily = useCallback(() => {
+  const startChallenge = useCallback((length: SessionLength) => {
+    setState((s) => ({
+      ...s,
+      settings: { ...s.settings, sessionLength: length, reviewMode: false },
+    }))
     setAppMode('normal')
     setDailyQuestions([])
     setDailyAlreadyDone(false)
-    setSession(initialSession(settings.sessionLength))
+    setSession(initialSession(length))
     setLastResult(null)
-    // recent-ids reset and first question are handled by the load-question effect
-    // when it observes appMode flipping back to 'normal'.
-  }, [settings.sessionLength])
+    recentIdsRef.current = []
+    setScreen('playing')
+  }, [])
+
+  const startReview = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      settings: { ...s.settings, reviewMode: true, sessionLength: 10 },
+    }))
+    setAppMode('normal')
+    setDailyQuestions([])
+    setDailyAlreadyDone(false)
+    setSession(initialSession(10))
+    setLastResult(null)
+    recentIdsRef.current = []
+    setScreen('playing')
+  }, [])
+
+  const navigateHome = useCallback(() => {
+    setAppMode('normal')
+    setDailyQuestions([])
+    setDailyAlreadyDone(false)
+    setLastResult(null)
+    setQuestion(null)
+    setPhase('answering')
+    setScreen('home')
+  }, [])
 
   useEffect(() => {
     localStorage.setItem(
@@ -331,17 +364,11 @@ export default function App() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       startDaily()
     } else if (start === '10' || start === '20') {
-      setState((s) => ({
-        ...s,
-        settings: { ...s.settings, sessionLength: Number(start) as 10 | 20 },
-      }))
+      startChallenge(Number(start) as 10 | 20)
     } else if (start === 'infinite') {
-      setState((s) => ({
-        ...s,
-        settings: { ...s.settings, sessionLength: 'infinite' },
-      }))
+      startChallenge('infinite')
     }
-  }, [startDaily])
+  }, [startDaily, startChallenge])
 
   // focus input when input mode comes up — only on devices with a fine pointer
   // (desktop). On touch devices this would force the on-screen keyboard up
@@ -485,7 +512,7 @@ export default function App() {
   // keyboard: 1-4 choices, Enter advance, Space reveal/next, Esc skip
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (showSettings) return
+      if (showSettings || screen === 'home') return
       const tag = (e.target as HTMLElement | null)?.tagName
       const isTyping = tag === 'INPUT' || tag === 'TEXTAREA'
 
@@ -531,7 +558,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [phase, question, goNext, restartSession, handleChoice, submitInput, skip, showSettings])
+  }, [phase, question, goNext, restartSession, handleChoice, submitInput, skip, showSettings, screen])
 
   const accuracy = stats.total === 0 ? 0 : Math.round((stats.correct / stats.total) * 100)
 
@@ -539,25 +566,13 @@ export default function App() {
   const dailyDoneToday = daily.lastCompleted?.date === today
   const reviewCount = reviewIds.size
 
-  const toggleReviewMode = useCallback(() => {
-    setState((s) => ({ ...s, settings: { ...s.settings, reviewMode: !s.settings.reviewMode } }))
-  }, [])
-
   return (
     <div className="min-h-full bg-slate-950 text-slate-100">
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-6">
         <Header
           stats={stats}
           accuracy={accuracy}
-          appMode={appMode}
-          dailyStreak={daily.streak}
-          dailyStreakLive={dailyStreakLive}
-          dailyDoneToday={dailyDoneToday}
-          reviewMode={settings.reviewMode}
-          reviewCount={reviewCount}
-          onToggleReview={toggleReviewMode}
-          onStartDaily={startDaily}
-          onExitDaily={exitDaily}
+          screen={screen}
           onProgress={() => setShowProgress(true)}
           onSettings={() => setShowSettings(true)}
           onReset={() =>
@@ -566,52 +581,61 @@ export default function App() {
         />
 
         <main className="mt-6 flex flex-1 flex-col gap-5">
-          {appMode === 'daily' && phase !== 'result' && (
-            <DailyBanner alreadyDone={dailyAlreadyDone} date={today} />
+          {screen === 'home' ? (
+            <HomeView
+              dailyStreak={daily.streak}
+              dailyStreakLive={dailyStreakLive}
+              dailyDoneToday={dailyDoneToday}
+              reviewCount={reviewCount}
+              onStartDaily={startDaily}
+              onStartChallenge={startChallenge}
+              onStartReview={startReview}
+            />
+          ) : (
+            <>
+              {appMode === 'daily' && phase !== 'result' && (
+                <DailyBanner alreadyDone={dailyAlreadyDone} date={today} />
+              )}
+
+              {phase !== 'result' && session.length !== 'infinite' && (
+                <SessionProgress session={session} />
+              )}
+
+              {phase !== 'result' &&
+                session.length === 'infinite' &&
+                session.answered > 0 && (
+                  <EndlessControls
+                    answered={session.answered}
+                    correct={session.correct}
+                    onFinish={finishEndless}
+                  />
+                )}
+
+              {phase === 'result' && lastResult ? (
+                <ResultView
+                  result={lastResult}
+                  onRestart={restartSession}
+                  onHome={navigateHome}
+                />
+              ) : question ? (
+                <QuestionView
+                  question={question}
+                  phase={phase}
+                  picked={picked}
+                  input={input}
+                  onInputChange={setInput}
+                  onChoice={handleChoice}
+                  onSubmit={submitInput}
+                  onSkip={skip}
+                  onNext={goNext}
+                  lastCorrect={lastCorrect}
+                  inputRef={inputRef}
+                />
+              ) : appMode === 'normal' && settings.reviewMode ? (
+                <EmptyReview onHome={navigateHome} />
+              ) : null}
+            </>
           )}
-
-          {phase !== 'result' && session.length !== 'infinite' && (
-            <SessionProgress session={session} />
-          )}
-
-          {phase !== 'result' &&
-            session.length === 'infinite' &&
-            session.answered > 0 && (
-              <EndlessControls
-                answered={session.answered}
-                correct={session.correct}
-                onFinish={finishEndless}
-              />
-            )}
-
-          {phase === 'result' && lastResult ? (
-            <ResultView
-              result={lastResult}
-              onRestart={restartSession}
-              onChangeSettings={() => setShowSettings(true)}
-              onExitDaily={exitDaily}
-            />
-          ) : question ? (
-            <QuestionView
-              question={question}
-              phase={phase}
-              picked={picked}
-              input={input}
-              onInputChange={setInput}
-              onChoice={handleChoice}
-              onSubmit={submitInput}
-              onSkip={skip}
-              onNext={goNext}
-              lastCorrect={lastCorrect}
-              inputRef={inputRef}
-            />
-          ) : appMode === 'normal' && settings.reviewMode ? (
-            <EmptyReview
-              onExit={() =>
-                setState((s) => ({ ...s, settings: { ...s.settings, reviewMode: false } }))
-              }
-            />
-          ) : null}
         </main>
 
         <Footer />
@@ -770,19 +794,126 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   )
 }
 
-function EmptyReview({ onExit }: { onExit: () => void }) {
+function HomeView({
+  dailyStreak,
+  dailyStreakLive,
+  dailyDoneToday,
+  reviewCount,
+  onStartDaily,
+  onStartChallenge,
+  onStartReview,
+}: {
+  dailyStreak: number
+  dailyStreakLive: boolean
+  dailyDoneToday: boolean
+  reviewCount: number
+  onStartDaily: () => void
+  onStartChallenge: (length: SessionLength) => void
+  onStartReview: () => void
+}) {
+  const streakBadge =
+    dailyStreakLive && dailyStreak > 0 ? `🔥 ${dailyStreak}日連続` : null
+
+  return (
+    <div className="flex flex-col gap-4">
+      <button
+        onClick={onStartDaily}
+        className="group flex flex-col items-start gap-2 rounded-2xl bg-amber-500/10 p-5 text-left ring-1 ring-amber-500/30 transition hover:bg-amber-500/15"
+      >
+        <div className="flex w-full items-center justify-between gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+            毎日 / {DAILY_LENGTH}問
+          </span>
+          {streakBadge && (
+            <span className="rounded-full bg-amber-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-amber-200 ring-1 ring-amber-500/40">
+              {streakBadge}
+            </span>
+          )}
+        </div>
+        <div className="text-xl font-semibold text-white">
+          {dailyDoneToday ? '今日のクイズ（達成済み）' : '今日のクイズに挑戦'}
+        </div>
+        <div className="text-sm text-amber-100/80">
+          {dailyDoneToday
+            ? '記録は更新されませんが、もう一度遊べます。'
+            : '日替わりの10問。連続記録を伸ばそう。'}
+        </div>
+      </button>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <HomeCard
+          title="10問チャレンジ"
+          description="サクッと正答率を競う基本モード。"
+          accent="indigo"
+          onClick={() => onStartChallenge(10)}
+        />
+        <HomeCard
+          title="無限モード"
+          description="気が済むまで連続出題。途中で集計可。"
+          accent="slate"
+          onClick={() => onStartChallenge('infinite')}
+        />
+      </div>
+
+      {reviewCount > 0 && (
+        <button
+          onClick={onStartReview}
+          className="flex items-center justify-between gap-3 rounded-xl bg-rose-500/10 px-4 py-3 text-left ring-1 ring-rose-500/30 transition hover:bg-rose-500/15"
+        >
+          <div>
+            <div className="text-sm font-semibold text-rose-100">復習モード</div>
+            <div className="text-xs text-rose-200/80">
+              間違えた問題だけを10問出題。
+            </div>
+          </div>
+          <span className="rounded-full bg-rose-500/20 px-2.5 py-1 text-xs font-semibold text-rose-100 ring-1 ring-rose-500/40">
+            {reviewCount}問
+          </span>
+        </button>
+      )}
+    </div>
+  )
+}
+
+function HomeCard({
+  title,
+  description,
+  accent,
+  onClick,
+}: {
+  title: string
+  description: string
+  accent: 'indigo' | 'slate'
+  onClick: () => void
+}) {
+  const styles =
+    accent === 'indigo'
+      ? 'bg-indigo-500/10 ring-indigo-500/30 hover:bg-indigo-500/15 text-indigo-100'
+      : 'bg-slate-900 ring-slate-800 hover:bg-slate-800 text-slate-100'
+  return (
+    <button
+      onClick={onClick}
+      className={`flex flex-col items-start gap-1 rounded-xl p-4 text-left ring-1 transition ${styles}`}
+    >
+      <div className="text-base font-semibold text-white">{title}</div>
+      <div className="text-xs text-slate-300/80">{description}</div>
+    </button>
+  )
+}
+
+function EmptyReview({ onHome }: { onHome: () => void }) {
   return (
     <div className="rounded-2xl bg-emerald-500/10 p-6 text-center ring-1 ring-emerald-500/30">
       <div className="text-3xl">🎉</div>
       <div className="mt-2 text-lg font-semibold text-white">弱点なし！</div>
       <p className="mt-1 text-sm text-emerald-100/80">
-        復習対象の問題はもうありません。通常モードに戻りましょう。
+        復習対象の問題はもうありません。ホームから別のクイズを始めましょう。
       </p>
       <button
-        onClick={onExit}
+        onClick={onHome}
         className="mt-4 rounded-md bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-100"
       >
-        通常モードに戻る
+        ホームへ戻る
       </button>
     </div>
   )
@@ -825,13 +956,11 @@ function SessionProgress({ session }: { session: Session }) {
 function ResultView({
   result,
   onRestart,
-  onChangeSettings,
-  onExitDaily,
+  onHome,
 }: {
   result: SessionResult
   onRestart: () => void
-  onChangeSettings: () => void
-  onExitDaily: () => void
+  onHome: () => void
 }) {
   const tone =
     result.accuracy >= 90
@@ -916,21 +1045,12 @@ function ResultView({
         {sharePayload && (
           <ShareButton payload={sharePayload} badges={badgeLabels} />
         )}
-        {result.kind === 'daily' ? (
-          <button
-            onClick={onExitDaily}
-            className="flex-1 rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
-          >
-            通常モードへ戻る
-          </button>
-        ) : (
-          <button
-            onClick={onChangeSettings}
-            className="flex-1 rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
-          >
-            設定を変える
-          </button>
-        )}
+        <button
+          onClick={onHome}
+          className="flex-1 rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+        >
+          ホームへ戻る
+        </button>
       </div>
     </div>
   )
@@ -1038,39 +1158,19 @@ function ResultStat({ label, value }: { label: string; value: string }) {
 function Header({
   stats,
   accuracy,
+  screen,
   onSettings,
   onReset,
-  appMode,
-  dailyStreak,
-  dailyStreakLive,
-  dailyDoneToday,
-  reviewMode,
-  reviewCount,
-  onToggleReview,
-  onStartDaily,
-  onExitDaily,
   onProgress,
 }: {
   stats: Stats
   accuracy: number
+  screen: Screen
   onSettings: () => void
   onReset: () => void
-  appMode: AppMode
-  dailyStreak: number
-  dailyStreakLive: boolean
-  dailyDoneToday: boolean
-  reviewMode: boolean
-  reviewCount: number
-  onToggleReview: () => void
-  onStartDaily: () => void
-  onExitDaily: () => void
   onProgress: () => void
 }) {
-  const isDaily = appMode === 'daily'
-  const dailyLabel = dailyDoneToday ? '🔥 今日クリア済' : '🔥 今日のクイズ'
-  const streakBadge =
-    dailyStreakLive && dailyStreak > 0 ? `${dailyStreak}日連続` : null
-  const showReviewToggle = !isDaily && (reviewMode || reviewCount > 0)
+  const isHome = screen === 'home'
 
   return (
     <header className="flex items-center justify-between gap-3">
@@ -1081,53 +1181,11 @@ function Header({
         <p className="text-xs text-slate-400">UIパーツの名前を暗記カード式で覚える</p>
       </div>
       <div className="flex items-center gap-2">
-        <Stat label="正答率" value={`${accuracy}%`} />
-        <Stat label="連続正解" value={stats.streak.toString()} highlight={stats.streak >= 5} />
-        <Stat label="出題数" value={stats.total.toString()} />
-        {isDaily ? (
-          <button
-            onClick={onExitDaily}
-            className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
-            title="通常モードに戻る"
-          >
-            ← 通常モード
-          </button>
-        ) : (
+        {!isHome && (
           <>
-            {showReviewToggle && (
-              <button
-                onClick={onToggleReview}
-                className={
-                  'rounded-md px-2.5 py-1.5 text-xs ring-1 ' +
-                  (reviewMode
-                    ? 'bg-rose-500/20 text-rose-200 ring-rose-500/40 hover:bg-rose-500/30'
-                    : 'bg-slate-900 text-slate-300 ring-slate-700 hover:bg-slate-800')
-                }
-                title={reviewMode ? '通常モードに戻る' : '間違えた問題だけを出題'}
-              >
-                {reviewMode ? '✓ 復習中' : '🔄 復習'}
-                <span className="ml-1 rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-200">
-                  {reviewCount}
-                </span>
-              </button>
-            )}
-            <button
-              onClick={onStartDaily}
-              className={
-                'rounded-md px-2.5 py-1.5 text-xs ring-1 ' +
-                (dailyDoneToday
-                  ? 'bg-slate-900 text-slate-300 ring-slate-700 hover:bg-slate-800'
-                  : 'bg-amber-500/15 text-amber-200 ring-amber-500/40 hover:bg-amber-500/25')
-              }
-              title="今日のクイズを始める"
-            >
-              {dailyLabel}
-              {streakBadge && (
-                <span className="ml-1 rounded-full bg-amber-500/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">
-                  {streakBadge}
-                </span>
-              )}
-            </button>
+            <Stat label="正答率" value={`${accuracy}%`} />
+            <Stat label="連続正解" value={stats.streak.toString()} highlight={stats.streak >= 5} />
+            <Stat label="出題数" value={stats.total.toString()} />
           </>
         )}
         <button
@@ -1137,21 +1195,24 @@ function Header({
         >
           📊 進捗
         </button>
-        <button
-          onClick={onSettings}
-          disabled={isDaily}
-          className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-          title={isDaily ? 'デイリー中は設定変更不可' : '設定'}
-        >
-          ⚙ 設定
-        </button>
-        <button
-          onClick={onReset}
-          className="rounded-md px-2 py-1.5 text-xs text-slate-400 hover:text-slate-200"
-          title="統計をリセット"
-        >
-          ↺
-        </button>
+        {isHome && (
+          <button
+            onClick={onSettings}
+            className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+            title="設定"
+          >
+            ⚙ 設定
+          </button>
+        )}
+        {isHome && (
+          <button
+            onClick={onReset}
+            className="rounded-md px-2 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+            title="統計をリセット"
+          >
+            ↺
+          </button>
+        )}
       </div>
     </header>
   )
