@@ -9,20 +9,34 @@ const HEIGHT = 630
 // determines the image, so a long immutable TTL is safe.
 const CACHE_HEADER = 'public, max-age=31536000, immutable, s-maxage=31536000'
 
-const fallback = (): Response => {
-  // Minimal SVG fallback for malformed payloads. Sent as PNG-equivalent
-  // image/svg+xml — most crawlers accept SVG OG images, and the SVG path
-  // never invokes the heavy WASM pipeline.
+const escapeXml = (s: string): string =>
+  s.replace(/[&<>]/g, (c) =>
+    c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;',
+  )
+
+const fallback = (err?: unknown): Response => {
+  // Minimal SVG fallback. When the dynamic PNG path throws we surface the
+  // error message inline so the failure is visible without scraping
+  // Cloudflare's real-time logs.
+  const message =
+    err === undefined
+      ? ''
+      : err instanceof Error
+        ? `${err.name}: ${err.message}`
+        : String(err)
+  const errLine = message
+    ? `\n  <text x="50%" y="86%" font-family="monospace" font-size="22" fill="#fca5a5" text-anchor="middle">${escapeXml(message).slice(0, 240)}</text>`
+    : ''
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}">
   <rect width="100%" height="100%" fill="#0b1020"/>
   <text x="50%" y="48%" font-family="sans-serif" font-size="64" fill="#e2e8f0" text-anchor="middle">UI Design Quiz</text>
-  <text x="50%" y="58%" font-family="sans-serif" font-size="28" fill="#94a3b8" text-anchor="middle">UIパーツの名前を覚えるクイズ</text>
+  <text x="50%" y="58%" font-family="sans-serif" font-size="28" fill="#94a3b8" text-anchor="middle">UIパーツの名前を覚えるクイズ</text>${errLine}
 </svg>`
   return new Response(svg, {
     headers: {
       'Content-Type': 'image/svg+xml; charset=utf-8',
-      'Cache-Control': 'public, max-age=300',
+      'Cache-Control': 'public, max-age=60',
     },
   })
 }
@@ -68,6 +82,6 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
     })
   } catch (e) {
     console.error('OG generation failed', e)
-    return fallback()
+    return fallback(e)
   }
 }
