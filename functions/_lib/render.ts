@@ -125,7 +125,7 @@ export const renderOgHtml = (p: SharePayload): string => {
       </div>
     `
 
-  return `
+  const template = `
 <div style="display:flex;width:1200px;height:630px;background:#0b1020;padding:48px;font-family:'Noto Sans JP';color:#e2e8f0;">
   <div style="display:flex;flex-direction:column;width:100%;height:100%;padding:56px 64px;border-radius:32px;background:${tone.bg};border:2px solid ${tone.ring};">
     <div style="display:flex;align-items:center;justify-content:space-between;">
@@ -134,14 +134,22 @@ export const renderOgHtml = (p: SharePayload): string => {
     </div>
     <div style="display:flex;color:#ffffff;font-size:48px;font-weight:700;margin-top:8px;">${escapeHtml(tone.headline)}</div>
     ${scoreBlock}
-    <div style="display:flex;flex:1;"></div>
+    <div style="display:flex;flex:1 1 0%;"></div>
     <div style="display:flex;align-items:center;justify-content:space-between;color:#94a3b8;font-size:32px;border-top:2px solid rgba(148,163,184,0.20);padding-top:24px;">
       <div style="display:flex;font-weight:700;color:#e2e8f0;">UI Design Quiz</div>
       <div style="display:flex;font-size:24px;">UIパーツの名前を覚えるクイズ</div>
     </div>
   </div>
 </div>
-  `.trim()
+  `
+  // Strip whitespace between tags. workers-og's HTMLRewriter-based parser
+  // emits every text node (including inter-tag indentation) as a Satori
+  // child, so the original indented source ends up looking like
+  // [ws, <div>, ws] to flexbox — which breaks justify-content and other
+  // distributions. Collapsing the source to a single line removes those
+  // stray whitespace children without sacrificing readability of the
+  // template above.
+  return template.replace(/>\s+</g, '><').trim()
 }
 
 // Fixed character set used to subset Noto Sans JP via Google Fonts. Kept
@@ -149,7 +157,7 @@ export const renderOgHtml = (p: SharePayload): string => {
 // distinct `text` param produces a different Google Fonts URL.
 export const FONT_TEXT = [
   '0123456789',
-  '/:()+',
+  '/:()+！',
   'お見事いい調子もう一回いこう',
   'いっぱい解いた',
   '完了問正解所要時間ベスト連続日チャレンジ',
@@ -157,5 +165,5 @@ export const FONT_TEXT = [
   '最速更新挑戦',
   '日月火水木金土',
   'UIDesignQuiz',
-  'パーツ名前覚えるクイズアプリ',
+  'パーツ名前を覚えるクイズアプリ',
 ].join('')
