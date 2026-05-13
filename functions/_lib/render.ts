@@ -104,14 +104,14 @@ export const renderOgHtml = (p: SharePayload): string => {
   // visually orbit it. Endless swaps "/N" for "問".
   const hero = isEndless
     ? `
-      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
+      <div style="display:flex;align-self:flex-end;align-items:baseline;color:#ffffff;font-weight:800;">
         <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
         <div style="display:flex;font-size:72px;color:#cbd5e1;margin-left:16px;">問</div>
         <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
       </div>
     `
     : `
-      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
+      <div style="display:flex;align-self:flex-end;align-items:baseline;color:#ffffff;font-weight:800;">
         <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
         <div style="display:flex;font-size:96px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
         <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
