@@ -33,7 +33,8 @@ import {
 
 type Phase = 'answering' | 'reveal' | 'result'
 type AppMode = 'normal' | 'daily'
-type Screen = 'home' | 'playing'
+type Screen = 'home' | 'setup' | 'playing'
+type SetupKind = 'challenge' | 'endless'
 
 const ALL_MODES: Mode[] = ['name-to-ui', 'ui-to-name', 'input-name']
 
@@ -45,14 +46,15 @@ const MODE_LABEL: Record<Mode, string> = {
   'input-name': '名前を入力',
 }
 
-const SESSION_LENGTH_OPTIONS: { value: SessionLength; label: string }[] = [
-  { value: 10, label: '10問' },
-  { value: 20, label: '20問' },
-  { value: 'infinite', label: '無限' },
-]
+// Slider bounds for the challenge setup. Min is 10, max is the parts pool
+// size, step is 5 — so 10, 15, 20, ... up to PARTS.length.
+const CHALLENGE_MIN = 10
+const CHALLENGE_STEP = 5
 
 type BestRecord = { accuracy: number; fastestMs?: number }
-type Bests = Partial<Record<10 | 20, BestRecord>>
+// Bests are tracked per challenge length (10, 15, 20, ... up to the parts
+// pool size). Endless sessions don't record a best.
+type Bests = Partial<Record<number, BestRecord>>
 
 type DailyRecord = {
   date: string
@@ -76,7 +78,7 @@ type SessionResultBase = {
 type SessionResult =
   | (SessionResultBase & {
       kind: 'session'
-      length: 10 | 20
+      length: number
       isBest: boolean
       isBestTime: boolean
       prevBest?: number
@@ -113,20 +115,22 @@ const DEFAULT_SETTINGS: Settings = {
 const DEFAULT_DAILY: DailyState = { lastCompleted: null, streak: 0 }
 
 // Migrate legacy `bests: { 10: 80 }` (accuracy-only number) into the new
-// record shape `{ 10: { accuracy: 80 } }` on load.
+// record shape `{ 10: { accuracy: 80 } }` on load. Accepts any positive
+// integer length key (10, 15, 20, ...).
 const normalizeBests = (raw: unknown): Bests => {
   if (!raw || typeof raw !== 'object') return {}
   const out: Bests = {}
-  for (const key of [10, 20] as const) {
-    const v = (raw as Record<string, unknown>)[String(key)]
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const length = Number(k)
+    if (!Number.isInteger(length) || length <= 0) continue
     if (typeof v === 'number') {
-      out[key] = { accuracy: v }
+      out[length] = { accuracy: v }
     } else if (v && typeof v === 'object') {
       const obj = v as Record<string, unknown>
       const accuracy = typeof obj.accuracy === 'number' ? obj.accuracy : undefined
       if (accuracy === undefined) continue
       const fastestMs = typeof obj.fastestMs === 'number' ? obj.fastestMs : undefined
-      out[key] = fastestMs === undefined ? { accuracy } : { accuracy, fastestMs }
+      out[length] = fastestMs === undefined ? { accuracy } : { accuracy, fastestMs }
     }
   }
   return out
@@ -182,12 +186,12 @@ export default function App() {
   const [picked, setPicked] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [lastCorrect, setLastCorrect] = useState<boolean | null>(null)
-  const [showSettings, setShowSettings] = useState(false)
   const [showProgress, setShowProgress] = useState(false)
   const [session, setSession] = useState<Session>(() => initialSession(settings.sessionLength))
   const [lastResult, setLastResult] = useState<SessionResult | null>(null)
   const [appMode, setAppMode] = useState<AppMode>('normal')
   const [screen, setScreen] = useState<Screen>('home')
+  const [setupKind, setSetupKind] = useState<SetupKind>('challenge')
   const [dailyQuestions, setDailyQuestions] = useState<Question[]>([])
   const [dailyAlreadyDone, setDailyAlreadyDone] = useState(false)
   const recentIdsRef = useRef<string[]>([])
@@ -316,6 +320,34 @@ export default function App() {
     setScreen('playing')
   }, [])
 
+  // Setup screen: opened from the Challenge or Endless home cards. The screen
+  // edits modes/categories/sessionLength on `settings` directly (so the
+  // filters persist as defaults for next time), then dispatches into
+  // startChallenge on "スタート".
+  const openSetup = useCallback((kind: SetupKind) => {
+    setSetupKind(kind)
+    // Endless ignores the slider — pin sessionLength so the slider's
+    // last-used value doesn't leak into an endless session.
+    if (kind === 'endless') {
+      setState((s) => ({ ...s, settings: { ...s.settings, sessionLength: 'infinite' } }))
+    } else if (settings.sessionLength === 'infinite') {
+      // Coming back from endless: fall back to the canonical length so the
+      // slider shows a sensible initial value.
+      setState((s) => ({ ...s, settings: { ...s.settings, sessionLength: CHALLENGE_MIN } }))
+    }
+    setScreen('setup')
+  }, [settings.sessionLength])
+
+  const startFromSetup = useCallback(() => {
+    const length =
+      setupKind === 'endless'
+        ? ('infinite' as const)
+        : settings.sessionLength === 'infinite'
+          ? CHALLENGE_MIN
+          : settings.sessionLength
+    startChallenge(length)
+  }, [setupKind, settings.sessionLength, startChallenge])
+
   const startReview = useCallback(() => {
     setState((s) => ({
       ...s,
@@ -363,10 +395,15 @@ export default function App() {
     if (start === 'daily') {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       startDaily()
-    } else if (start === '10' || start === '20') {
-      startChallenge(Number(start) as 10 | 20)
     } else if (start === 'infinite') {
       startChallenge('infinite')
+    } else {
+      const n = Number(start)
+      // Accept any positive integer length so legacy share URLs (?start=20)
+      // and any future lengths continue to work without a redirect.
+      if (Number.isInteger(n) && n > 0) {
+        startChallenge(n)
+      }
     }
   }, [startDaily, startChallenge])
 
@@ -512,7 +549,7 @@ export default function App() {
   // keyboard: 1-4 choices, Enter advance, Space reveal/next, Esc skip
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (showSettings || screen === 'home') return
+      if (screen !== 'playing') return
       const tag = (e.target as HTMLElement | null)?.tagName
       const isTyping = tag === 'INPUT' || tag === 'TEXTAREA'
 
@@ -558,7 +595,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [phase, question, goNext, restartSession, handleChoice, submitInput, skip, showSettings, screen])
+  }, [phase, question, goNext, restartSession, handleChoice, submitInput, skip, screen])
 
   const accuracy = stats.total === 0 ? 0 : Math.round((stats.correct / stats.total) * 100)
 
@@ -574,7 +611,6 @@ export default function App() {
           accuracy={accuracy}
           screen={screen}
           onProgress={() => setShowProgress(true)}
-          onSettings={() => setShowSettings(true)}
           onReset={() =>
             setState((s) => ({ ...s, stats: initialStats }))
           }
@@ -588,8 +624,17 @@ export default function App() {
               dailyDoneToday={dailyDoneToday}
               reviewCount={reviewCount}
               onStartDaily={startDaily}
-              onStartChallenge={startChallenge}
+              onOpenSetup={openSetup}
               onStartReview={startReview}
+            />
+          ) : screen === 'setup' ? (
+            <SetupScreen
+              kind={setupKind}
+              settings={settings}
+              maxLength={PARTS.length}
+              onChange={(s) => setState((prev) => ({ ...prev, settings: s }))}
+              onStart={startFromSetup}
+              onBack={navigateHome}
             />
           ) : (
             <>
@@ -640,14 +685,6 @@ export default function App() {
 
         <Footer />
       </div>
-
-      {showSettings && (
-        <SettingsModal
-          settings={settings}
-          onClose={() => setShowSettings(false)}
-          onChange={(s) => setState((prev) => ({ ...prev, settings: s }))}
-        />
-      )}
 
       {showProgress && (
         <ProgressModal partStats={partStats} onClose={() => setShowProgress(false)} />
@@ -800,7 +837,7 @@ function HomeView({
   dailyDoneToday,
   reviewCount,
   onStartDaily,
-  onStartChallenge,
+  onOpenSetup,
   onStartReview,
 }: {
   dailyStreak: number
@@ -808,7 +845,7 @@ function HomeView({
   dailyDoneToday: boolean
   reviewCount: number
   onStartDaily: () => void
-  onStartChallenge: (length: SessionLength) => void
+  onOpenSetup: (kind: SetupKind) => void
   onStartReview: () => void
 }) {
   const streakBadge =
@@ -842,16 +879,16 @@ function HomeView({
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <HomeCard
-          title="10問チャレンジ"
-          description="サクッと正答率を競う基本モード。"
+          title="チャレンジ"
+          description="問題数とカテゴリを選んで正答率を競う。"
           accent="indigo"
-          onClick={() => onStartChallenge(10)}
+          onClick={() => onOpenSetup('challenge')}
         />
         <HomeCard
-          title="無限モード"
+          title="エンドレスモード"
           description="気が済むまで連続出題。途中で集計可。"
           accent="slate"
-          onClick={() => onStartChallenge('infinite')}
+          onClick={() => onOpenSetup('endless')}
         />
       </div>
 
@@ -1159,17 +1196,16 @@ function Header({
   stats,
   accuracy,
   screen,
-  onSettings,
   onReset,
   onProgress,
 }: {
   stats: Stats
   accuracy: number
   screen: Screen
-  onSettings: () => void
   onReset: () => void
   onProgress: () => void
 }) {
+  const isPlaying = screen === 'playing'
   const isHome = screen === 'home'
 
   return (
@@ -1181,7 +1217,7 @@ function Header({
         <p className="text-xs text-slate-400">UIパーツの名前を暗記カード式で覚える</p>
       </div>
       <div className="flex items-center gap-2">
-        {!isHome && (
+        {isPlaying && (
           <>
             <Stat label="正答率" value={`${accuracy}%`} />
             <Stat label="連続正解" value={stats.streak.toString()} highlight={stats.streak >= 5} />
@@ -1195,15 +1231,6 @@ function Header({
         >
           📊 進捗
         </button>
-        {isHome && (
-          <button
-            onClick={onSettings}
-            className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
-            title="設定"
-          >
-            ⚙ 設定
-          </button>
-        )}
         {isHome && (
           <button
             onClick={onReset}
@@ -1497,20 +1524,36 @@ function Reveal({
   )
 }
 
-function SettingsModal({
+function SetupScreen({
+  kind,
   settings,
-  onClose,
+  maxLength,
   onChange,
+  onStart,
+  onBack,
 }: {
+  kind: SetupKind
   settings: Settings
-  onClose: () => void
+  maxLength: number
   onChange: (s: Settings) => void
+  onStart: () => void
+  onBack: () => void
 }) {
   const allModes: Mode[] = ['name-to-ui', 'ui-to-name', 'input-name']
   const allCategories = useMemo(
     () => Array.from(new Set(PARTS.map((p) => p.category))),
     [],
   )
+
+  // Slider values: 10, 15, 20, ..., up to the max that fits in the pool.
+  const sliderMax = Math.max(
+    CHALLENGE_MIN,
+    Math.floor(maxLength / CHALLENGE_STEP) * CHALLENGE_STEP,
+  )
+  const currentLength =
+    typeof settings.sessionLength === 'number'
+      ? Math.min(Math.max(settings.sessionLength, CHALLENGE_MIN), sliderMax)
+      : CHALLENGE_MIN
 
   const toggleMode = (m: Mode) => {
     const next = settings.modes.includes(m)
@@ -1536,94 +1579,104 @@ function SettingsModal({
   const isCategoryActive = (c: PartCategory) =>
     settings.categories === 'all' || settings.categories.includes(c)
 
+  const title = kind === 'challenge' ? 'チャレンジ' : 'エンドレスモード'
+  const subtitle =
+    kind === 'challenge'
+      ? '問題数とカテゴリを選んでスタート。'
+      : '気が済むまで連続出題。出題範囲だけ選んでね。'
+
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/70 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl bg-slate-900 p-5 ring-1 ring-slate-800"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-white">設定</h2>
-          <button onClick={onClose} className="text-sm text-slate-400 hover:text-white">
-            閉じる
-          </button>
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onBack}
+          className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+        >
+          ← 戻る
+        </button>
+        <div>
+          <h2 className="text-lg font-semibold text-white">{title}</h2>
+          <p className="text-xs text-slate-400">{subtitle}</p>
         </div>
-
-        <section className="mb-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            セッション長
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {SESSION_LENGTH_OPTIONS.map((opt) => {
-              const active = settings.sessionLength === opt.value
-              return (
-                <button
-                  key={String(opt.value)}
-                  onClick={() => onChange({ ...settings, sessionLength: opt.value })}
-                  className={
-                    'rounded-md px-3 py-2 text-sm ring-1 transition ' +
-                    (active
-                      ? 'bg-indigo-500/20 text-indigo-200 ring-indigo-500/40'
-                      : 'bg-slate-950 text-slate-300 ring-slate-800 hover:text-white')
-                  }
-                >
-                  {opt.label}
-                </button>
-              )
-            })}
-          </div>
-          <p className="mt-2 text-[11px] text-slate-500">
-            10問・20問はリザルト画面で正答率とベストを表示します。
-          </p>
-        </section>
-
-        <section className="mb-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            出題モード
-          </div>
-          <div className="grid grid-cols-1 gap-2">
-            {allModes.map((m) => (
-              <label
-                key={m}
-                className="flex cursor-pointer items-center gap-2 rounded-md bg-slate-950 px-3 py-2 text-sm ring-1 ring-slate-800"
-              >
-                <input
-                  type="checkbox"
-                  checked={settings.modes.includes(m)}
-                  onChange={() => toggleMode(m)}
-                  className="size-4 accent-indigo-500"
-                />
-                {MODE_LABEL[m]}
-              </label>
-            ))}
-          </div>
-        </section>
-
-        <section>
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-            出題カテゴリ
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {allCategories.map((c) => (
-              <button
-                key={c}
-                onClick={() => toggleCategory(c)}
-                className={
-                  'rounded-full px-3 py-1 text-xs ring-1 transition ' +
-                  (isCategoryActive(c)
-                    ? 'bg-indigo-500/20 text-indigo-200 ring-indigo-500/40'
-                    : 'bg-slate-950 text-slate-400 ring-slate-800')
-                }
-              >
-                {CATEGORY_LABEL[c]}
-              </button>
-            ))}
-          </div>
-        </section>
       </div>
+
+      {kind === 'challenge' && (
+        <section className="rounded-2xl bg-slate-900 p-4 ring-1 ring-slate-800">
+          <div className="mb-2 flex items-baseline justify-between">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              問題数
+            </div>
+            <div className="text-2xl font-bold tabular-nums text-white">
+              {currentLength}
+              <span className="ml-1 text-sm text-slate-400">問</span>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={CHALLENGE_MIN}
+            max={sliderMax}
+            step={CHALLENGE_STEP}
+            value={currentLength}
+            onChange={(e) => onChange({ ...settings, sessionLength: Number(e.target.value) })}
+            className="w-full accent-indigo-500"
+          />
+          <div className="mt-1 flex justify-between text-[11px] text-slate-500">
+            <span>{CHALLENGE_MIN}</span>
+            <span>{sliderMax}</span>
+          </div>
+        </section>
+      )}
+
+      <section>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          出題モード
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          {allModes.map((m) => (
+            <label
+              key={m}
+              className="flex cursor-pointer items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm ring-1 ring-slate-800"
+            >
+              <input
+                type="checkbox"
+                checked={settings.modes.includes(m)}
+                onChange={() => toggleMode(m)}
+                className="size-4 accent-indigo-500"
+              />
+              {MODE_LABEL[m]}
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          出題カテゴリ
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {allCategories.map((c) => (
+            <button
+              key={c}
+              onClick={() => toggleCategory(c)}
+              className={
+                'rounded-full px-3 py-1 text-xs ring-1 transition ' +
+                (isCategoryActive(c)
+                  ? 'bg-indigo-500/20 text-indigo-200 ring-indigo-500/40'
+                  : 'bg-slate-900 text-slate-400 ring-slate-800')
+              }
+            >
+              {CATEGORY_LABEL[c]}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <button
+        onClick={onStart}
+        className="mt-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-100"
+      >
+        スタート
+      </button>
     </div>
   )
 }

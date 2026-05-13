@@ -18,7 +18,7 @@ export type Question =
       part: Part
     }
 
-export type SessionLength = 10 | 20 | 'infinite'
+export type SessionLength = number | 'infinite'
 
 export type Settings = {
   modes: Mode[]
