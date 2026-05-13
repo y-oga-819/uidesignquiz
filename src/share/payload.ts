@@ -161,7 +161,12 @@ export const buildShareText = (p: SharePayload, badges: string[] = []): string =
 export const buildShareUrl = (origin: string, p: SharePayload): string =>
   `${origin}/r?d=${encodePayload(p)}`
 
+// twitter.com/intent/tweet is the long-standing intent endpoint that X still
+// maintains. The newer x.com/intent/post triggers a redirect chain on iOS
+// Safari (login → app-handoff sniffing) that hangs on a black screen for
+// signed-out viewers, while the twitter.com form opens reliably in both the
+// web composer and the X app.
 export const buildXIntent = (text: string, url: string): string => {
-  const params = new URLSearchParams({ text: `${text}\n`, url })
-  return `https://x.com/intent/post?${params.toString()}`
+  const params = new URLSearchParams({ text, url })
+  return `https://twitter.com/intent/tweet?${params.toString()}`
 }

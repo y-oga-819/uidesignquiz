@@ -101,20 +101,22 @@ export const renderOgHtml = (p: SharePayload): string => {
 
   // Right-side hero: the score on a single baseline row so the big number
   // sits closer to the optical center of the card and the supporting glyphs
-  // visually orbit it. Endless swaps "/N" for "問".
+  // visually orbit it. Endless swaps "/N" for "問". Sizes are tuned to fit
+  // inside the body row alongside the meta + footer; 260px overflowed and
+  // pushed the hero's descender box across the footer's border-top.
   const hero = isEndless
     ? `
       <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-        <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-        <div style="display:flex;font-size:72px;color:#cbd5e1;margin-left:16px;">問</div>
-        <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
+        <div style="display:flex;font-size:200px;line-height:1;letter-spacing:-4px;">${correct.value}${correct.suffix}</div>
+        <div style="display:flex;font-size:64px;color:#cbd5e1;margin-left:16px;">問</div>
+        <div style="display:flex;font-size:36px;color:#cbd5e1;font-weight:400;margin-left:20px;">正解</div>
       </div>
     `
     : `
       <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-        <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-        <div style="display:flex;font-size:96px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
-        <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
+        <div style="display:flex;font-size:200px;line-height:1;letter-spacing:-4px;">${correct.value}${correct.suffix}</div>
+        <div style="display:flex;font-size:80px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
+        <div style="display:flex;font-size:36px;color:#cbd5e1;font-weight:400;margin-left:20px;">正解</div>
       </div>
     `
 
