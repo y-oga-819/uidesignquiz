@@ -40,7 +40,13 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
       text: FONT_TEXT,
     })
 
-    return new ImageResponse(renderOgHtml(payload), {
+    // NOTE: workers-og's ImageResponse returns the Response synchronously and
+    // does the actual Satori→resvg render inside a ReadableStream.start()
+    // callback. If the render throws, the response body errors mid-flight but
+    // the 200/image/png headers are already on the wire — clients see a
+    // broken image. Buffer the body here so render failures land in catch
+    // below and we can serve the SVG fallback instead.
+    const image = new ImageResponse(renderOgHtml(payload), {
       width: WIDTH,
       height: HEIGHT,
       fonts: [
@@ -52,7 +58,11 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
         },
       ],
       emoji: 'twemoji',
+    })
+    const png = await image.arrayBuffer()
+    return new Response(png, {
       headers: {
+        'Content-Type': 'image/png',
         'Cache-Control': CACHE_HEADER,
       },
     })
