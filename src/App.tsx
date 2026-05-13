@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PARTS, CATEGORY_LABEL } from './parts/catalog'
 import type { PartCategory } from './parts/types'
 import {
+  buildDailyQuestions,
   buildQuestion,
   initialSession,
   initialStats,
   isCorrectInput,
+  previousDateString,
+  todayString,
   updateSession,
   updateStats,
   type Mode,
@@ -17,6 +20,11 @@ import {
 } from './quiz/engine'
 
 type Phase = 'answering' | 'reveal' | 'result'
+type AppMode = 'normal' | 'daily'
+
+const ALL_MODES: Mode[] = ['name-to-ui', 'ui-to-name', 'input-name']
+
+const DAILY_LENGTH = 20
 
 const MODE_LABEL: Record<Mode, string> = {
   'name-to-ui': '名前→UI',
@@ -32,15 +40,39 @@ const SESSION_LENGTH_OPTIONS: { value: SessionLength; label: string }[] = [
 
 type Bests = Partial<Record<10 | 20, number>>
 
-type SessionResult = {
-  length: 10 | 20
+type DailyRecord = {
+  date: string
+  correct: number
+  total: number
+  durationMs: number
+}
+
+type DailyState = {
+  lastCompleted: DailyRecord | null
+  streak: number
+}
+
+type SessionResultBase = {
   correct: number
   total: number
   accuracy: number
   durationMs: number
-  isBest: boolean
-  prevBest?: number
 }
+
+type SessionResult =
+  | (SessionResultBase & {
+      kind: 'session'
+      length: 10 | 20
+      isBest: boolean
+      prevBest?: number
+    })
+  | (SessionResultBase & {
+      kind: 'daily'
+      date: string
+      alreadyDone: boolean
+      newStreak: number
+      prevStreak: number
+    })
 
 const STORAGE_KEY = 'uidq.v1'
 
@@ -48,6 +80,7 @@ type Persisted = {
   settings: Settings
   stats: Stats
   bests: Bests
+  daily: DailyState
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +88,8 @@ const DEFAULT_SETTINGS: Settings = {
   categories: 'all',
   sessionLength: 10,
 }
+
+const DEFAULT_DAILY: DailyState = { lastCompleted: null, streak: 0 }
 
 const loadPersisted = (): Persisted => {
   try {
@@ -66,10 +101,28 @@ const loadPersisted = (): Persisted => {
       settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
       stats: parsed.stats ?? initialStats,
       bests: parsed.bests ?? {},
+      daily: parsed.daily ?? DEFAULT_DAILY,
     }
   } catch {
-    return { settings: DEFAULT_SETTINGS, stats: initialStats, bests: {} }
+    return {
+      settings: DEFAULT_SETTINGS,
+      stats: initialStats,
+      bests: {},
+      daily: DEFAULT_DAILY,
+    }
   }
+}
+
+const computeStreak = (date: string, daily: DailyState): number => {
+  const last = daily.lastCompleted?.date
+  if (last === date) return daily.streak
+  if (last === previousDateString(date)) return daily.streak + 1
+  return 1
+}
+
+const isDailyStreakLive = (date: string, daily: DailyState): boolean => {
+  const last = daily.lastCompleted?.date
+  return last === date || last === previousDateString(date)
 }
 
 const formatDuration = (ms: number): string => {
@@ -80,7 +133,7 @@ const formatDuration = (ms: number): string => {
 }
 
 export default function App() {
-  const [{ settings, stats, bests }, setState] = useState<Persisted>(loadPersisted)
+  const [{ settings, stats, bests, daily }, setState] = useState<Persisted>(loadPersisted)
   const [question, setQuestion] = useState<Question | null>(null)
   const [phase, setPhase] = useState<Phase>('answering')
   const [picked, setPicked] = useState<string | null>(null)
@@ -89,8 +142,13 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [session, setSession] = useState<Session>(() => initialSession(settings.sessionLength))
   const [lastResult, setLastResult] = useState<SessionResult | null>(null)
+  const [appMode, setAppMode] = useState<AppMode>('normal')
+  const [dailyQuestions, setDailyQuestions] = useState<Question[]>([])
+  const [dailyAlreadyDone, setDailyAlreadyDone] = useState(false)
   const recentIdsRef = useRef<string[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const today = todayString()
 
   const next = useCallback(() => {
     const q = buildQuestion(PARTS, settings, recentIdsRef.current)
@@ -102,33 +160,91 @@ export default function App() {
     setLastCorrect(null)
   }, [settings])
 
+  const showQuestion = useCallback((q: Question) => {
+    setQuestion(q)
+    setPhase('answering')
+    setPicked(null)
+    setInput('')
+    setLastCorrect(null)
+  }, [])
+
   // Reset transient session state on settings change (and on initial render
   // this is a no-op because lastSettings starts equal to settings).
   // See https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
   const [lastSettings, setLastSettings] = useState(settings)
-  if (lastSettings !== settings) {
+  if (appMode === 'normal' && lastSettings !== settings) {
     setLastSettings(settings)
     setSession(initialSession(settings.sessionLength))
     setLastResult(null)
   }
 
-  // Load first question on mount and whenever settings change. The recent-ids
-  // ref is also cleared here so prior history doesn't bleed into a new session.
+  // Load first question on mount and whenever settings change (normal mode only).
   useEffect(() => {
+    if (appMode !== 'normal') return
     recentIdsRef.current = []
     next()
-  }, [next])
+  }, [next, appMode])
 
   const restartSession = useCallback(() => {
+    if (appMode === 'daily') {
+      const questions =
+        dailyQuestions.length > 0
+          ? dailyQuestions
+          : buildDailyQuestions(PARTS, ALL_MODES, today, DAILY_LENGTH)
+      if (dailyQuestions.length === 0) setDailyQuestions(questions)
+      setDailyAlreadyDone(daily.lastCompleted?.date === today)
+      setSession({
+        length: DAILY_LENGTH,
+        answered: 0,
+        correct: 0,
+        startedAt: Date.now(),
+      })
+      setLastResult(null)
+      showQuestion(questions[0])
+      return
+    }
     setSession(initialSession(settings.sessionLength))
     setLastResult(null)
     recentIdsRef.current = []
     next()
-  }, [next, settings.sessionLength])
+  }, [
+    appMode,
+    dailyQuestions,
+    daily.lastCompleted,
+    today,
+    next,
+    settings.sessionLength,
+    showQuestion,
+  ])
+
+  const startDaily = useCallback(() => {
+    const questions = buildDailyQuestions(PARTS, ALL_MODES, today, DAILY_LENGTH)
+    setAppMode('daily')
+    setDailyQuestions(questions)
+    setDailyAlreadyDone(daily.lastCompleted?.date === today)
+    setSession({
+      length: DAILY_LENGTH,
+      answered: 0,
+      correct: 0,
+      startedAt: Date.now(),
+    })
+    setLastResult(null)
+    showQuestion(questions[0])
+  }, [today, daily.lastCompleted, showQuestion])
+
+  const exitDaily = useCallback(() => {
+    setAppMode('normal')
+    setDailyQuestions([])
+    setDailyAlreadyDone(false)
+    setSession(initialSession(settings.sessionLength))
+    setLastResult(null)
+    // recent-ids reset and first question are handled by the load-question effect
+    // when it observes appMode flipping back to 'normal'.
+  }, [settings.sessionLength])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, stats, bests }))
-  }, [settings, stats, bests])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, stats, bests, daily }))
+  }, [settings, stats, bests, daily])
 
   // focus input when input mode comes up
   useEffect(() => {
@@ -149,6 +265,41 @@ export default function App() {
   )
 
   const goNext = useCallback(() => {
+    if (appMode === 'daily') {
+      if (session.answered >= dailyQuestions.length) {
+        const total = dailyQuestions.length
+        const correct = session.correct
+        const accuracy = Math.round((correct / total) * 100)
+        const durationMs = Date.now() - session.startedAt
+        const prevStreak = daily.streak
+        const newStreak = computeStreak(today, daily)
+        if (!dailyAlreadyDone) {
+          setState((s) => ({
+            ...s,
+            daily: {
+              lastCompleted: { date: today, correct, total, durationMs },
+              streak: newStreak,
+            },
+          }))
+        }
+        setLastResult({
+          kind: 'daily',
+          date: today,
+          correct,
+          total,
+          accuracy,
+          durationMs,
+          alreadyDone: dailyAlreadyDone,
+          newStreak: dailyAlreadyDone ? prevStreak : newStreak,
+          prevStreak,
+        })
+        setPhase('result')
+        return
+      }
+      showQuestion(dailyQuestions[session.answered])
+      return
+    }
+
     if (session.length !== 'infinite' && session.answered >= session.length) {
       const total = session.length
       const correct = session.correct
@@ -159,12 +310,21 @@ export default function App() {
       if (isBest) {
         setState((s) => ({ ...s, bests: { ...s.bests, [total]: accuracy } }))
       }
-      setLastResult({ length: total, correct, total, accuracy, durationMs, isBest, prevBest })
+      setLastResult({
+        kind: 'session',
+        length: total,
+        correct,
+        total,
+        accuracy,
+        durationMs,
+        isBest,
+        prevBest,
+      })
       setPhase('result')
       return
     }
     next()
-  }, [session, bests, next])
+  }, [appMode, dailyQuestions, dailyAlreadyDone, session, bests, daily, today, next, showQuestion])
 
   const handleChoice = useCallback(
     (id: string) => {
@@ -238,12 +398,21 @@ export default function App() {
 
   const accuracy = stats.total === 0 ? 0 : Math.round((stats.correct / stats.total) * 100)
 
+  const dailyStreakLive = isDailyStreakLive(today, daily)
+  const dailyDoneToday = daily.lastCompleted?.date === today
+
   return (
     <div className="min-h-full bg-slate-950 text-slate-100">
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4 py-6">
         <Header
           stats={stats}
           accuracy={accuracy}
+          appMode={appMode}
+          dailyStreak={daily.streak}
+          dailyStreakLive={dailyStreakLive}
+          dailyDoneToday={dailyDoneToday}
+          onStartDaily={startDaily}
+          onExitDaily={exitDaily}
           onSettings={() => setShowSettings(true)}
           onReset={() =>
             setState((s) => ({ ...s, stats: initialStats }))
@@ -251,6 +420,10 @@ export default function App() {
         />
 
         <main className="mt-6 flex flex-1 flex-col gap-5">
+          {appMode === 'daily' && phase !== 'result' && (
+            <DailyBanner alreadyDone={dailyAlreadyDone} date={today} />
+          )}
+
           {phase !== 'result' && session.length !== 'infinite' && (
             <SessionProgress session={session} />
           )}
@@ -260,6 +433,7 @@ export default function App() {
               result={lastResult}
               onRestart={restartSession}
               onChangeSettings={() => setShowSettings(true)}
+              onExitDaily={exitDaily}
             />
           ) : (
             question && (
@@ -294,6 +468,22 @@ export default function App() {
   )
 }
 
+function DailyBanner({ alreadyDone, date }: { alreadyDone: boolean; date: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-200 ring-1 ring-amber-500/30">
+      <span className="text-base">🔥</span>
+      <div className="flex-1">
+        <div className="font-semibold">今日のクイズ ({date})</div>
+        <div className="text-[11px] text-amber-200/70">
+          {alreadyDone
+            ? '本日達成済み。再挑戦は記録に影響しません。'
+            : `${DAILY_LENGTH}問解いて連続記録を伸ばそう。`}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SessionProgress({ session }: { session: Session }) {
   if (session.length === 'infinite') return null
   const ratio = Math.min(session.answered / session.length, 1)
@@ -316,10 +506,12 @@ function ResultView({
   result,
   onRestart,
   onChangeSettings,
+  onExitDaily,
 }: {
   result: SessionResult
   onRestart: () => void
   onChangeSettings: () => void
+  onExitDaily: () => void
 }) {
   const tone =
     result.accuracy >= 90
@@ -328,11 +520,14 @@ function ResultView({
         ? { ring: 'ring-indigo-500/40', bg: 'bg-indigo-500/10', text: 'text-indigo-300', headline: 'いい調子！' }
         : { ring: 'ring-amber-500/40', bg: 'bg-amber-500/10', text: 'text-amber-300', headline: 'もう一回いこう' }
 
+  const isDaily = result.kind === 'daily'
+  const eyebrow = isDaily ? `今日のクイズ (${result.date}) 完了` : `${result.length}問チャレンジ 完了`
+
   return (
     <div className="flex flex-col gap-5">
       <div className={`rounded-2xl p-6 ring-1 ${tone.bg} ${tone.ring}`}>
         <div className={`text-xs font-semibold uppercase tracking-wider ${tone.text}`}>
-          {result.length}問チャレンジ 完了
+          {eyebrow}
         </div>
         <div className="mt-1 text-2xl font-semibold text-white">{tone.headline}</div>
         <div className="mt-4 flex items-end gap-3">
@@ -341,26 +536,43 @@ function ResultView({
             <span className="text-2xl text-slate-400">/{result.total}</span>
           </div>
           <div className="pb-1 text-sm text-slate-300">正解</div>
-          {result.isBest && (
+          {result.kind === 'session' && result.isBest && (
             <span className="ml-auto rounded-full bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-400/40">
               ★ ベスト更新
+            </span>
+          )}
+          {result.kind === 'daily' && !result.alreadyDone && result.newStreak > result.prevStreak && (
+            <span className="ml-auto rounded-full bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-400/40">
+              🔥 連続+1
+            </span>
+          )}
+          {result.kind === 'daily' && result.alreadyDone && (
+            <span className="ml-auto rounded-full bg-slate-700/40 px-3 py-1 text-xs font-medium text-slate-300 ring-1 ring-slate-600/40">
+              再挑戦（記録なし）
             </span>
           )}
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2 text-center">
           <ResultStat label="正答率" value={`${result.accuracy}%`} />
           <ResultStat label="所要時間" value={formatDuration(result.durationMs)} />
-          <ResultStat
-            label="ベスト"
-            value={
-              result.isBest
-                ? `${result.accuracy}%`
-                : result.prevBest !== undefined
-                  ? `${result.prevBest}%`
-                  : '—'
-            }
-          />
+          {result.kind === 'session' ? (
+            <ResultStat
+              label="ベスト"
+              value={
+                result.isBest
+                  ? `${result.accuracy}%`
+                  : result.prevBest !== undefined
+                    ? `${result.prevBest}%`
+                    : '—'
+              }
+            />
+          ) : (
+            <ResultStat label="連続日数" value={`${result.newStreak}日`} />
+          )}
         </div>
+        {result.kind === 'daily' && !result.alreadyDone && (
+          <p className="mt-3 text-xs text-slate-300">明日もまた挑戦してね。</p>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -370,12 +582,21 @@ function ResultView({
         >
           もう一回 ↵
         </button>
-        <button
-          onClick={onChangeSettings}
-          className="flex-1 rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
-        >
-          設定を変える
-        </button>
+        {result.kind === 'daily' ? (
+          <button
+            onClick={onExitDaily}
+            className="flex-1 rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+          >
+            通常モードへ戻る
+          </button>
+        ) : (
+          <button
+            onClick={onChangeSettings}
+            className="flex-1 rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+          >
+            設定を変える
+          </button>
+        )}
       </div>
     </div>
   )
@@ -395,12 +616,29 @@ function Header({
   accuracy,
   onSettings,
   onReset,
+  appMode,
+  dailyStreak,
+  dailyStreakLive,
+  dailyDoneToday,
+  onStartDaily,
+  onExitDaily,
 }: {
   stats: Stats
   accuracy: number
   onSettings: () => void
   onReset: () => void
+  appMode: AppMode
+  dailyStreak: number
+  dailyStreakLive: boolean
+  dailyDoneToday: boolean
+  onStartDaily: () => void
+  onExitDaily: () => void
 }) {
+  const isDaily = appMode === 'daily'
+  const dailyLabel = dailyDoneToday ? '🔥 今日クリア済' : '🔥 今日のクイズ'
+  const streakBadge =
+    dailyStreakLive && dailyStreak > 0 ? `${dailyStreak}日連続` : null
+
   return (
     <header className="flex items-center justify-between gap-3">
       <div>
@@ -413,10 +651,38 @@ function Header({
         <Stat label="正答率" value={`${accuracy}%`} />
         <Stat label="連続正解" value={stats.streak.toString()} highlight={stats.streak >= 5} />
         <Stat label="出題数" value={stats.total.toString()} />
+        {isDaily ? (
+          <button
+            onClick={onExitDaily}
+            className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+            title="通常モードに戻る"
+          >
+            ← 通常モード
+          </button>
+        ) : (
+          <button
+            onClick={onStartDaily}
+            className={
+              'rounded-md px-2.5 py-1.5 text-xs ring-1 ' +
+              (dailyDoneToday
+                ? 'bg-slate-900 text-slate-300 ring-slate-700 hover:bg-slate-800'
+                : 'bg-amber-500/15 text-amber-200 ring-amber-500/40 hover:bg-amber-500/25')
+            }
+            title="今日のクイズを始める"
+          >
+            {dailyLabel}
+            {streakBadge && (
+              <span className="ml-1 rounded-full bg-amber-500/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">
+                {streakBadge}
+              </span>
+            )}
+          </button>
+        )}
         <button
           onClick={onSettings}
-          className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
-          title="設定"
+          disabled={isDaily}
+          className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+          title={isDaily ? 'デイリー中は設定変更不可' : '設定'}
         >
           ⚙ 設定
         </button>

@@ -61,6 +61,41 @@ const shuffle = <T,>(arr: T[]): T[] => {
   return a
 }
 
+// Mulberry32 — small deterministic PRNG used for the daily challenge.
+const mulberry32 = (seed: number) => () => {
+  let t = (seed = (seed + 0x6d2b79f5) | 0)
+  t = Math.imul(t ^ (t >>> 15), t | 1)
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+}
+
+const hashString = (s: string): number => {
+  let h = 0
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
+  }
+  return h >>> 0
+}
+
+const sampleWith = <T,>(arr: T[], n: number, rng: () => number): T[] => {
+  const copy = [...arr]
+  const out: T[] = []
+  while (out.length < n && copy.length > 0) {
+    const i = Math.floor(rng() * copy.length)
+    out.push(copy.splice(i, 1)[0])
+  }
+  return out
+}
+
+const shuffleWith = <T,>(arr: T[], rng: () => number): T[] => {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 const filterParts = (parts: Part[], settings: Settings) =>
   settings.categories === 'all'
     ? parts
@@ -130,3 +165,34 @@ export const updateSession = (s: Session, correct: boolean): Session => ({
 
 export const isSessionComplete = (s: Session): boolean =>
   s.length !== 'infinite' && s.answered >= s.length
+
+export const buildDailyQuestions = (
+  parts: Part[],
+  modes: Mode[],
+  dateStr: string,
+  length: number,
+): Question[] => {
+  const rng = mulberry32(hashString(dateStr))
+  const usableModes = modes.length > 0 ? modes : (['name-to-ui'] as Mode[])
+  const selected = sampleWith(parts, Math.min(length, parts.length), rng)
+  return selected.map((part) => {
+    const mode = usableModes[Math.floor(rng() * usableModes.length)]
+    if (mode === 'input-name') return { mode, part }
+    const distractorPool = parts.filter((p) => p.id !== part.id)
+    const distractors = sampleWith(distractorPool, Math.min(3, distractorPool.length), rng)
+    return { mode, part, choices: shuffleWith([part, ...distractors], rng) }
+  })
+}
+
+export const todayString = (now: Date = new Date()): string => {
+  const y = now.getFullYear()
+  const m = (now.getMonth() + 1).toString().padStart(2, '0')
+  const d = now.getDate().toString().padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+export const previousDateString = (dateStr: string): string => {
+  const d = new Date(`${dateStr}T00:00:00`)
+  d.setDate(d.getDate() - 1)
+  return todayString(d)
+}
