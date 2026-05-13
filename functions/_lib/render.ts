@@ -99,25 +99,22 @@ export const renderOgHtml = (p: SharePayload): string => {
   // therefore arrive at Satori with multiple children — and Satori rejects
   // multi-child divs that don't have an explicit display.
 
-  // Right-side hero: big number with the qualifier baseline-aligned, then
-  // the "正解" label underneath. The endless mode swaps "/N" for "問".
+  // Right-side hero: the score on a single baseline row so the big number
+  // sits closer to the optical center of the card and the supporting glyphs
+  // visually orbit it. Endless swaps "/N" for "問".
   const hero = isEndless
     ? `
-      <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
-        <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="display:flex;font-size:240px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-          <div style="display:flex;font-size:64px;color:#cbd5e1;margin-left:16px;">問</div>
-        </div>
-        <div style="display:flex;font-size:44px;color:#cbd5e1;margin-top:8px;">正解</div>
+      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
+        <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+        <div style="display:flex;font-size:72px;color:#cbd5e1;margin-left:16px;">問</div>
+        <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
       </div>
     `
     : `
-      <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
-        <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="display:flex;font-size:240px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-          <div style="display:flex;font-size:88px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
-        </div>
-        <div style="display:flex;font-size:44px;color:#cbd5e1;margin-top:8px;">正解</div>
+      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
+        <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+        <div style="display:flex;font-size:96px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
+        <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
       </div>
     `
 
