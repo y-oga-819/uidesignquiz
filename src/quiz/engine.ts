@@ -1,0 +1,106 @@
+import type { Part, PartCategory } from '../parts/types'
+
+export type Mode = 'name-to-ui' | 'ui-to-name' | 'input-name'
+
+export type Question =
+  | {
+      mode: 'name-to-ui'
+      part: Part
+      choices: Part[]
+    }
+  | {
+      mode: 'ui-to-name'
+      part: Part
+      choices: Part[]
+    }
+  | {
+      mode: 'input-name'
+      part: Part
+    }
+
+export type Settings = {
+  modes: Mode[]
+  categories: PartCategory[] | 'all'
+}
+
+export type Stats = {
+  total: number
+  correct: number
+  streak: number
+  bestStreak: number
+}
+
+const rand = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]
+
+const sample = <T,>(arr: T[], n: number): T[] => {
+  const copy = [...arr]
+  const out: T[] = []
+  while (out.length < n && copy.length > 0) {
+    const i = Math.floor(Math.random() * copy.length)
+    out.push(copy.splice(i, 1)[0])
+  }
+  return out
+}
+
+const shuffle = <T,>(arr: T[]): T[] => {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+const filterParts = (parts: Part[], settings: Settings) =>
+  settings.categories === 'all'
+    ? parts
+    : parts.filter((p) => (settings.categories as PartCategory[]).includes(p.category))
+
+export const buildQuestion = (
+  parts: Part[],
+  settings: Settings,
+  recentIds: string[] = [],
+): Question => {
+  const pool = filterParts(parts, settings)
+  if (pool.length === 0) throw new Error('問題プールが空です')
+
+  const candidate = pool.filter((p) => !recentIds.includes(p.id))
+  const part = rand(candidate.length > 0 ? candidate : pool)
+
+  const mode = rand(settings.modes)
+
+  if (mode === 'input-name') {
+    return { mode, part }
+  }
+
+  // need 3 distractors of distinct ids and names
+  const distractorPool = pool.filter((p) => p.id !== part.id)
+  const distractors = sample(distractorPool, Math.min(3, distractorPool.length))
+  const choices = shuffle([part, ...distractors])
+  return { mode, part, choices }
+}
+
+const normalize = (s: string): string =>
+  s
+    .toLowerCase()
+    .replace(/[\s　\-_/]/g, '')
+    .replace(/[ァ-ン]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)) // カナ→ひら
+    .normalize('NFKC')
+
+export const isCorrectInput = (input: string, part: Part): boolean => {
+  const target = normalize(input)
+  if (!target) return false
+  return [part.name, part.kana, ...part.aliases].some((a) => normalize(a) === target)
+}
+
+export const updateStats = (stats: Stats, correct: boolean): Stats => {
+  const streak = correct ? stats.streak + 1 : 0
+  return {
+    total: stats.total + 1,
+    correct: stats.correct + (correct ? 1 : 0),
+    streak,
+    bestStreak: Math.max(stats.bestStreak, streak),
+  }
+}
+
+export const initialStats: Stats = { total: 0, correct: 0, streak: 0, bestStreak: 0 }
