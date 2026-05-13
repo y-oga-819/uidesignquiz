@@ -18,9 +18,12 @@ export type Question =
       part: Part
     }
 
+export type SessionLength = 10 | 20 | 'infinite'
+
 export type Settings = {
   modes: Mode[]
   categories: PartCategory[] | 'all'
+  sessionLength: SessionLength
 }
 
 export type Stats = {
@@ -28,6 +31,13 @@ export type Stats = {
   correct: number
   streak: number
   bestStreak: number
+}
+
+export type Session = {
+  length: SessionLength
+  answered: number
+  correct: number
+  startedAt: number
 }
 
 const rand = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)]
@@ -83,7 +93,7 @@ export const buildQuestion = (
 const normalize = (s: string): string =>
   s
     .toLowerCase()
-    .replace(/[\s　\-_/]/g, '')
+    .replace(/[\s\u3000\-_/]/g, '')
     .replace(/[ァ-ン]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)) // カナ→ひら
     .normalize('NFKC')
 
@@ -104,3 +114,19 @@ export const updateStats = (stats: Stats, correct: boolean): Stats => {
 }
 
 export const initialStats: Stats = { total: 0, correct: 0, streak: 0, bestStreak: 0 }
+
+export const initialSession = (length: SessionLength): Session => ({
+  length,
+  answered: 0,
+  correct: 0,
+  startedAt: Date.now(),
+})
+
+export const updateSession = (s: Session, correct: boolean): Session => ({
+  ...s,
+  answered: s.answered + 1,
+  correct: s.correct + (correct ? 1 : 0),
+})
+
+export const isSessionComplete = (s: Session): boolean =>
+  s.length !== 'infinite' && s.answered >= s.length

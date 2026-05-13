@@ -3,16 +3,20 @@ import { PARTS, CATEGORY_LABEL } from './parts/catalog'
 import type { PartCategory } from './parts/types'
 import {
   buildQuestion,
+  initialSession,
   initialStats,
   isCorrectInput,
+  updateSession,
   updateStats,
   type Mode,
   type Question,
+  type Session,
+  type SessionLength,
   type Settings,
   type Stats,
 } from './quiz/engine'
 
-type Phase = 'answering' | 'reveal'
+type Phase = 'answering' | 'reveal' | 'result'
 
 const MODE_LABEL: Record<Mode, string> = {
   'name-to-ui': '名前→UI',
@@ -20,36 +24,71 @@ const MODE_LABEL: Record<Mode, string> = {
   'input-name': '名前を入力',
 }
 
+const SESSION_LENGTH_OPTIONS: { value: SessionLength; label: string }[] = [
+  { value: 10, label: '10問' },
+  { value: 20, label: '20問' },
+  { value: 'infinite', label: '無限' },
+]
+
+type Bests = Partial<Record<10 | 20, number>>
+
+type SessionResult = {
+  length: 10 | 20
+  correct: number
+  total: number
+  accuracy: number
+  durationMs: number
+  isBest: boolean
+  prevBest?: number
+}
+
 const STORAGE_KEY = 'uidq.v1'
 
 type Persisted = {
   settings: Settings
   stats: Stats
+  bests: Bests
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  modes: ['name-to-ui', 'ui-to-name', 'input-name'],
+  categories: 'all',
+  sessionLength: 10,
 }
 
 const loadPersisted = (): Persisted => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) throw new Error('empty')
-    const parsed = JSON.parse(raw) as Persisted
+    const parsed = JSON.parse(raw) as Partial<Persisted>
     if (!parsed.settings?.modes?.length) throw new Error('invalid')
-    return parsed
-  } catch {
     return {
-      settings: { modes: ['name-to-ui', 'ui-to-name', 'input-name'], categories: 'all' },
-      stats: initialStats,
+      settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
+      stats: parsed.stats ?? initialStats,
+      bests: parsed.bests ?? {},
     }
+  } catch {
+    return { settings: DEFAULT_SETTINGS, stats: initialStats, bests: {} }
   }
 }
 
+const formatDuration = (ms: number): string => {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 export default function App() {
-  const [{ settings, stats }, setState] = useState<Persisted>(loadPersisted)
+  const [{ settings, stats, bests }, setState] = useState<Persisted>(loadPersisted)
   const [question, setQuestion] = useState<Question | null>(null)
   const [phase, setPhase] = useState<Phase>('answering')
   const [picked, setPicked] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [lastCorrect, setLastCorrect] = useState<boolean | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [session, setSession] = useState<Session>(() => initialSession(settings.sessionLength))
+  const [lastResult, setLastResult] = useState<SessionResult | null>(null)
   const recentIdsRef = useRef<string[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -63,13 +102,33 @@ export default function App() {
     setLastCorrect(null)
   }, [settings])
 
+  // Reset transient session state on settings change (and on initial render
+  // this is a no-op because lastSettings starts equal to settings).
+  // See https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  const [lastSettings, setLastSettings] = useState(settings)
+  if (lastSettings !== settings) {
+    setLastSettings(settings)
+    setSession(initialSession(settings.sessionLength))
+    setLastResult(null)
+  }
+
+  // Load first question on mount and whenever settings change. The recent-ids
+  // ref is also cleared here so prior history doesn't bleed into a new session.
   useEffect(() => {
+    recentIdsRef.current = []
     next()
   }, [next])
 
+  const restartSession = useCallback(() => {
+    setSession(initialSession(settings.sessionLength))
+    setLastResult(null)
+    recentIdsRef.current = []
+    next()
+  }, [next, settings.sessionLength])
+
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, stats }))
-  }, [settings, stats])
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, stats, bests }))
+  }, [settings, stats, bests])
 
   // focus input when input mode comes up
   useEffect(() => {
@@ -84,9 +143,28 @@ export default function App() {
       if (pickedId !== undefined) setPicked(pickedId)
       setPhase('reveal')
       setState((s) => ({ ...s, stats: updateStats(s.stats, correct) }))
+      setSession((s) => updateSession(s, correct))
     },
     [],
   )
+
+  const goNext = useCallback(() => {
+    if (session.length !== 'infinite' && session.answered >= session.length) {
+      const total = session.length
+      const correct = session.correct
+      const accuracy = Math.round((correct / total) * 100)
+      const durationMs = Date.now() - session.startedAt
+      const prevBest = bests[total]
+      const isBest = prevBest === undefined || accuracy > prevBest
+      if (isBest) {
+        setState((s) => ({ ...s, bests: { ...s.bests, [total]: accuracy } }))
+      }
+      setLastResult({ length: total, correct, total, accuracy, durationMs, isBest, prevBest })
+      setPhase('result')
+      return
+    }
+    next()
+  }, [session, bests, next])
 
   const handleChoice = useCallback(
     (id: string) => {
@@ -114,10 +192,18 @@ export default function App() {
       const tag = (e.target as HTMLElement | null)?.tagName
       const isTyping = tag === 'INPUT' || tag === 'TEXTAREA'
 
+      if (phase === 'result') {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          restartSession()
+        }
+        return
+      }
+
       if (phase === 'reveal') {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          next()
+          goNext()
         }
         return
       }
@@ -148,7 +234,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [phase, question, next, handleChoice, submitInput, skip, showSettings])
+  }, [phase, question, goNext, restartSession, handleChoice, submitInput, skip, showSettings])
 
   const accuracy = stats.total === 0 ? 0 : Math.round((stats.correct / stats.total) * 100)
 
@@ -164,21 +250,33 @@ export default function App() {
           }
         />
 
-        <main className="mt-6 flex-1">
-          {question && (
-            <QuestionView
-              question={question}
-              phase={phase}
-              picked={picked}
-              input={input}
-              onInputChange={setInput}
-              onChoice={handleChoice}
-              onSubmit={submitInput}
-              onSkip={skip}
-              onNext={next}
-              lastCorrect={lastCorrect}
-              inputRef={inputRef}
+        <main className="mt-6 flex flex-1 flex-col gap-5">
+          {phase !== 'result' && session.length !== 'infinite' && (
+            <SessionProgress session={session} />
+          )}
+
+          {phase === 'result' && lastResult ? (
+            <ResultView
+              result={lastResult}
+              onRestart={restartSession}
+              onChangeSettings={() => setShowSettings(true)}
             />
+          ) : (
+            question && (
+              <QuestionView
+                question={question}
+                phase={phase}
+                picked={picked}
+                input={input}
+                onInputChange={setInput}
+                onChoice={handleChoice}
+                onSubmit={submitInput}
+                onSkip={skip}
+                onNext={goNext}
+                lastCorrect={lastCorrect}
+                inputRef={inputRef}
+              />
+            )
           )}
         </main>
 
@@ -192,6 +290,102 @@ export default function App() {
           onChange={(s) => setState((prev) => ({ ...prev, settings: s }))}
         />
       )}
+    </div>
+  )
+}
+
+function SessionProgress({ session }: { session: Session }) {
+  if (session.length === 'infinite') return null
+  const ratio = Math.min(session.answered / session.length, 1)
+  return (
+    <div className="flex items-center gap-2 text-xs text-slate-400">
+      <span className="tabular-nums">
+        {Math.min(session.answered, session.length)}/{session.length}
+      </span>
+      <div className="h-1 flex-1 overflow-hidden rounded-full bg-slate-800">
+        <div
+          className="h-full rounded-full bg-indigo-500 transition-all"
+          style={{ width: `${ratio * 100}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function ResultView({
+  result,
+  onRestart,
+  onChangeSettings,
+}: {
+  result: SessionResult
+  onRestart: () => void
+  onChangeSettings: () => void
+}) {
+  const tone =
+    result.accuracy >= 90
+      ? { ring: 'ring-emerald-500/40', bg: 'bg-emerald-500/10', text: 'text-emerald-300', headline: 'お見事！' }
+      : result.accuracy >= 70
+        ? { ring: 'ring-indigo-500/40', bg: 'bg-indigo-500/10', text: 'text-indigo-300', headline: 'いい調子！' }
+        : { ring: 'ring-amber-500/40', bg: 'bg-amber-500/10', text: 'text-amber-300', headline: 'もう一回いこう' }
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className={`rounded-2xl p-6 ring-1 ${tone.bg} ${tone.ring}`}>
+        <div className={`text-xs font-semibold uppercase tracking-wider ${tone.text}`}>
+          {result.length}問チャレンジ 完了
+        </div>
+        <div className="mt-1 text-2xl font-semibold text-white">{tone.headline}</div>
+        <div className="mt-4 flex items-end gap-3">
+          <div className="text-5xl font-bold tabular-nums text-white">
+            {result.correct}
+            <span className="text-2xl text-slate-400">/{result.total}</span>
+          </div>
+          <div className="pb-1 text-sm text-slate-300">正解</div>
+          {result.isBest && (
+            <span className="ml-auto rounded-full bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-400/40">
+              ★ ベスト更新
+            </span>
+          )}
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+          <ResultStat label="正答率" value={`${result.accuracy}%`} />
+          <ResultStat label="所要時間" value={formatDuration(result.durationMs)} />
+          <ResultStat
+            label="ベスト"
+            value={
+              result.isBest
+                ? `${result.accuracy}%`
+                : result.prevBest !== undefined
+                  ? `${result.prevBest}%`
+                  : '—'
+            }
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={onRestart}
+          className="flex-1 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-100"
+        >
+          もう一回 ↵
+        </button>
+        <button
+          onClick={onChangeSettings}
+          className="flex-1 rounded-xl bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+        >
+          設定を変える
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ResultStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-slate-950/40 px-3 py-2 ring-1 ring-slate-800">
+      <div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="mt-0.5 text-base font-semibold text-white tabular-nums">{value}</div>
     </div>
   )
 }
@@ -571,6 +765,34 @@ function SettingsModal({
             閉じる
           </button>
         </div>
+
+        <section className="mb-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            セッション長
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {SESSION_LENGTH_OPTIONS.map((opt) => {
+              const active = settings.sessionLength === opt.value
+              return (
+                <button
+                  key={String(opt.value)}
+                  onClick={() => onChange({ ...settings, sessionLength: opt.value })}
+                  className={
+                    'rounded-md px-3 py-2 text-sm ring-1 transition ' +
+                    (active
+                      ? 'bg-indigo-500/20 text-indigo-200 ring-indigo-500/40'
+                      : 'bg-slate-950 text-slate-300 ring-slate-800 hover:text-white')
+                  }
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            10問・20問はリザルト画面で正答率とベストを表示します。
+          </p>
+        </section>
 
         <section className="mb-4">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
