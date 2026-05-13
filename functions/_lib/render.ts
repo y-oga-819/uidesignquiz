@@ -102,7 +102,7 @@ export const renderOgHtml = (p: SharePayload): string => {
         <div style="font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
       </div>
       <div style="display:flex;align-items:center;gap:32px;margin-top:32px;color:#cbd5e1;font-size:40px;">
-        <div style="display:flex;align-items:center;gap:10px;">⏱ ${escapeHtml(time)}</div>
+        <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
         <div style="display:flex;align-items:center;">挑戦 ${total.value}${total.suffix}問</div>
       </div>
     `
@@ -115,7 +115,7 @@ export const renderOgHtml = (p: SharePayload): string => {
         <div style="font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
       </div>
       <div style="display:flex;align-items:center;margin-top:32px;color:#cbd5e1;font-size:44px;">
-        <div style="display:flex;align-items:center;gap:10px;">⏱ ${escapeHtml(time)}</div>
+        <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
       </div>
     `
 
