@@ -69,6 +69,14 @@ export const reviewPoolIds = (stats: PartStats): Set<string> => {
   return out
 }
 
+export type MasteryStatus = 'untouched' | 'learning' | 'mastered'
+
+export const partStatus = (stats: PartStats, partId: string): MasteryStatus => {
+  const s = stats[partId]
+  if (!s || s.attempts === 0) return 'untouched'
+  return s.streak >= MASTERY_STREAK ? 'mastered' : 'learning'
+}
+
 export type Stats = {
   total: number
   correct: number

@@ -8,6 +8,7 @@ import {
   initialSession,
   initialStats,
   isCorrectInput,
+  partStatus,
   previousDateString,
   reviewPoolIds,
   todayString,
@@ -22,6 +23,7 @@ import {
   type Settings,
   type Stats,
 } from './quiz/engine'
+import type { Part } from './parts/types'
 
 type Phase = 'answering' | 'reveal' | 'result'
 type AppMode = 'normal' | 'daily'
@@ -148,6 +150,7 @@ export default function App() {
   const [input, setInput] = useState('')
   const [lastCorrect, setLastCorrect] = useState<boolean | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showProgress, setShowProgress] = useState(false)
   const [session, setSession] = useState<Session>(() => initialSession(settings.sessionLength))
   const [lastResult, setLastResult] = useState<SessionResult | null>(null)
   const [appMode, setAppMode] = useState<AppMode>('normal')
@@ -459,6 +462,7 @@ export default function App() {
           onToggleReview={toggleReviewMode}
           onStartDaily={startDaily}
           onExitDaily={exitDaily}
+          onProgress={() => setShowProgress(true)}
           onSettings={() => setShowSettings(true)}
           onReset={() =>
             setState((s) => ({ ...s, stats: initialStats }))
@@ -514,7 +518,149 @@ export default function App() {
           onChange={(s) => setState((prev) => ({ ...prev, settings: s }))}
         />
       )}
+
+      {showProgress && (
+        <ProgressModal partStats={partStats} onClose={() => setShowProgress(false)} />
+      )}
     </div>
+  )
+}
+
+function ProgressModal({
+  partStats,
+  onClose,
+}: {
+  partStats: PartStats
+  onClose: () => void
+}) {
+  const grouped = useMemo(() => {
+    const map = new Map<Part['category'], Part[]>()
+    for (const p of PARTS) {
+      const arr = map.get(p.category) ?? []
+      arr.push(p)
+      map.set(p.category, arr)
+    }
+    return Array.from(map.entries())
+  }, [])
+
+  const totals = useMemo(() => {
+    let mastered = 0
+    let learning = 0
+    let untouched = 0
+    for (const p of PARTS) {
+      const status = partStatus(partStats, p.id)
+      if (status === 'mastered') mastered++
+      else if (status === 'learning') learning++
+      else untouched++
+    }
+    return { mastered, learning, untouched, total: PARTS.length }
+  }, [partStats])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-slate-950/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-slate-900 p-5 ring-1 ring-slate-800"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-base font-semibold text-white">学習の進捗</h2>
+          <button onClick={onClose} className="text-sm text-slate-400 hover:text-white">
+            閉じる
+          </button>
+        </div>
+
+        <div className="mb-5 rounded-xl bg-slate-950/50 p-4 ring-1 ring-slate-800">
+          <div className="flex items-end gap-2">
+            <div className="text-3xl font-bold tabular-nums text-white">
+              {totals.mastered}
+              <span className="text-base text-slate-400">/{totals.total}</span>
+            </div>
+            <div className="pb-1 text-xs text-slate-300">マスター</div>
+          </div>
+          <div className="mt-3 flex h-1.5 overflow-hidden rounded-full bg-slate-800">
+            <div
+              className="h-full bg-emerald-500"
+              style={{ width: `${(totals.mastered / totals.total) * 100}%` }}
+            />
+            <div
+              className="h-full bg-indigo-500/60"
+              style={{ width: `${(totals.learning / totals.total) * 100}%` }}
+            />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-400">
+            <LegendDot color="bg-emerald-500" label={`マスター ${totals.mastered}`} />
+            <LegendDot color="bg-indigo-500/60" label={`学習中 ${totals.learning}`} />
+            <LegendDot color="bg-slate-700" label={`未出題 ${totals.untouched}`} />
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            連続2回正解でマスター扱いになります。
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-4">
+          {grouped.map(([category, parts]) => {
+            const m = parts.filter((p) => partStatus(partStats, p.id) === 'mastered').length
+            const l = parts.filter((p) => partStatus(partStats, p.id) === 'learning').length
+            const ratio = parts.length === 0 ? 0 : m / parts.length
+            return (
+              <section key={category}>
+                <div className="mb-1 flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-200">
+                    {CATEGORY_LABEL[category]}
+                  </span>
+                  <span className="tabular-nums text-slate-400">
+                    {m}/{parts.length}
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{ width: `${ratio * 100}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {parts.map((p) => {
+                    const status = partStatus(partStats, p.id)
+                    const dot =
+                      status === 'mastered'
+                        ? 'bg-emerald-500 text-emerald-50'
+                        : status === 'learning'
+                          ? 'bg-indigo-500/60 text-indigo-50'
+                          : 'bg-slate-700 text-slate-300'
+                    return (
+                      <span
+                        key={p.id}
+                        title={`${p.name}（${
+                          status === 'mastered' ? 'マスター' : status === 'learning' ? '学習中' : '未出題'
+                        }）`}
+                        className={`rounded-full px-2 py-0.5 text-[10px] ${dot}`}
+                      >
+                        {p.name}
+                      </span>
+                    )
+                  })}
+                </div>
+                {l > 0 && (
+                  <div className="mt-1 text-[10px] text-slate-500">学習中 {l}問</div>
+                )}
+              </section>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      <span className={`inline-block size-2 rounded-full ${color}`} />
+      {label}
+    </span>
   )
 }
 
@@ -693,6 +839,7 @@ function Header({
   onToggleReview,
   onStartDaily,
   onExitDaily,
+  onProgress,
 }: {
   stats: Stats
   accuracy: number
@@ -707,6 +854,7 @@ function Header({
   onToggleReview: () => void
   onStartDaily: () => void
   onExitDaily: () => void
+  onProgress: () => void
 }) {
   const isDaily = appMode === 'daily'
   const dailyLabel = dailyDoneToday ? '🔥 今日クリア済' : '🔥 今日のクイズ'
@@ -772,6 +920,13 @@ function Header({
             </button>
           </>
         )}
+        <button
+          onClick={onProgress}
+          className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+          title="学習の進捗"
+        >
+          📊 進捗
+        </button>
         <button
           onClick={onSettings}
           disabled={isDaily}
