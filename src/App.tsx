@@ -71,11 +71,14 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, stats }))
   }, [settings, stats])
 
-  // focus input when input mode comes up
+  // focus input when input mode comes up — only on devices with a fine pointer
+  // (desktop). On touch devices this would force the on-screen keyboard up
+  // before the user has had a chance to read the question.
   useEffect(() => {
-    if (question?.mode === 'input-name' && phase === 'answering') {
-      inputRef.current?.focus()
-    }
+    if (question?.mode !== 'input-name' || phase !== 'answering') return
+    if (typeof window === 'undefined') return
+    if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return
+    inputRef.current?.focus()
   }, [question, phase])
 
   const reveal = useCallback(
@@ -434,7 +437,7 @@ function InputAnswer({
           disabled={phase === 'reveal'}
           placeholder="例: Toast / トースト / toast"
           className={
-            'flex-1 rounded-md bg-slate-950 px-3 py-2 text-sm text-white outline-none ring-1 ' +
+            'flex-1 rounded-md bg-slate-950 px-3 py-2 text-base text-white outline-none ring-1 ' +
             (phase === 'reveal'
               ? correct
                 ? 'ring-emerald-500'
