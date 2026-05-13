@@ -24,6 +24,49 @@ export type Settings = {
   modes: Mode[]
   categories: PartCategory[] | 'all'
   sessionLength: SessionLength
+  reviewMode: boolean
+}
+
+export type PartStat = {
+  attempts: number
+  correct: number
+  streak: number
+  needsReview: boolean
+}
+
+export type PartStats = Record<string, PartStat>
+
+// Parts must be answered correctly this many times in a row to leave the
+// review pool (after having been wrong at least once).
+export const MASTERY_STREAK = 2
+
+export const initialPartStats: PartStats = {}
+
+export const updatePartStats = (
+  stats: PartStats,
+  partId: string,
+  correct: boolean,
+): PartStats => {
+  const prev = stats[partId] ?? { attempts: 0, correct: 0, streak: 0, needsReview: false }
+  const newStreak = correct ? prev.streak + 1 : 0
+  const needsReview = correct ? prev.needsReview && newStreak < MASTERY_STREAK : true
+  return {
+    ...stats,
+    [partId]: {
+      attempts: prev.attempts + 1,
+      correct: prev.correct + (correct ? 1 : 0),
+      streak: newStreak,
+      needsReview,
+    },
+  }
+}
+
+export const reviewPoolIds = (stats: PartStats): Set<string> => {
+  const out = new Set<string>()
+  for (const [id, s] of Object.entries(stats)) {
+    if (s.needsReview) out.add(id)
+  }
+  return out
 }
 
 export type Stats = {

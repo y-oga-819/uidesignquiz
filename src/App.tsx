@@ -4,14 +4,18 @@ import type { PartCategory } from './parts/types'
 import {
   buildDailyQuestions,
   buildQuestion,
+  initialPartStats,
   initialSession,
   initialStats,
   isCorrectInput,
   previousDateString,
+  reviewPoolIds,
   todayString,
+  updatePartStats,
   updateSession,
   updateStats,
   type Mode,
+  type PartStats,
   type Question,
   type Session,
   type SessionLength,
@@ -81,12 +85,14 @@ type Persisted = {
   stats: Stats
   bests: Bests
   daily: DailyState
+  partStats: PartStats
 }
 
 const DEFAULT_SETTINGS: Settings = {
   modes: ['name-to-ui', 'ui-to-name', 'input-name'],
   categories: 'all',
   sessionLength: 10,
+  reviewMode: false,
 }
 
 const DEFAULT_DAILY: DailyState = { lastCompleted: null, streak: 0 }
@@ -102,6 +108,7 @@ const loadPersisted = (): Persisted => {
       stats: parsed.stats ?? initialStats,
       bests: parsed.bests ?? {},
       daily: parsed.daily ?? DEFAULT_DAILY,
+      partStats: parsed.partStats ?? initialPartStats,
     }
   } catch {
     return {
@@ -109,6 +116,7 @@ const loadPersisted = (): Persisted => {
       stats: initialStats,
       bests: {},
       daily: DEFAULT_DAILY,
+      partStats: initialPartStats,
     }
   }
 }
@@ -133,7 +141,7 @@ const formatDuration = (ms: number): string => {
 }
 
 export default function App() {
-  const [{ settings, stats, bests, daily }, setState] = useState<Persisted>(loadPersisted)
+  const [{ settings, stats, bests, daily, partStats }, setState] = useState<Persisted>(loadPersisted)
   const [question, setQuestion] = useState<Question | null>(null)
   const [phase, setPhase] = useState<Phase>('answering')
   const [picked, setPicked] = useState<string | null>(null)
@@ -150,14 +158,36 @@ export default function App() {
 
   const today = todayString()
 
+  const reviewIds = useMemo(() => reviewPoolIds(partStats), [partStats])
+  // Held in a ref so `next` can read the latest pool without depending on
+  // partStats (which would re-fire the load-question effect after every answer).
+  const reviewIdsRef = useRef(reviewIds)
+  useEffect(() => {
+    reviewIdsRef.current = reviewIds
+  }, [reviewIds])
+
   const next = useCallback(() => {
-    const q = buildQuestion(PARTS, settings, recentIdsRef.current)
-    recentIdsRef.current = [q.part.id, ...recentIdsRef.current].slice(0, 8)
-    setQuestion(q)
-    setPhase('answering')
-    setPicked(null)
-    setInput('')
-    setLastCorrect(null)
+    const basePool = settings.reviewMode
+      ? PARTS.filter((p) => reviewIdsRef.current.has(p.id))
+      : PARTS
+    if (basePool.length === 0) {
+      setQuestion(null)
+      setPhase('answering')
+      return
+    }
+    try {
+      const q = buildQuestion(basePool, settings, recentIdsRef.current)
+      recentIdsRef.current = [q.part.id, ...recentIdsRef.current].slice(0, 8)
+      setQuestion(q)
+      setPhase('answering')
+      setPicked(null)
+      setInput('')
+      setLastCorrect(null)
+    } catch {
+      // pool became empty after applying category filter inside buildQuestion
+      setQuestion(null)
+      setPhase('answering')
+    }
   }, [settings])
 
   const showQuestion = useCallback((q: Question) => {
@@ -243,8 +273,11 @@ export default function App() {
   }, [settings.sessionLength])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ settings, stats, bests, daily }))
-  }, [settings, stats, bests, daily])
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ settings, stats, bests, daily, partStats }),
+    )
+  }, [settings, stats, bests, daily, partStats])
 
   // focus input when input mode comes up
   useEffect(() => {
@@ -258,10 +291,15 @@ export default function App() {
       setLastCorrect(correct)
       if (pickedId !== undefined) setPicked(pickedId)
       setPhase('reveal')
-      setState((s) => ({ ...s, stats: updateStats(s.stats, correct) }))
+      const partId = question?.part.id
+      setState((s) => ({
+        ...s,
+        stats: updateStats(s.stats, correct),
+        partStats: partId ? updatePartStats(s.partStats, partId, correct) : s.partStats,
+      }))
       setSession((s) => updateSession(s, correct))
     },
-    [],
+    [question],
   )
 
   const goNext = useCallback(() => {
@@ -400,6 +438,11 @@ export default function App() {
 
   const dailyStreakLive = isDailyStreakLive(today, daily)
   const dailyDoneToday = daily.lastCompleted?.date === today
+  const reviewCount = reviewIds.size
+
+  const toggleReviewMode = useCallback(() => {
+    setState((s) => ({ ...s, settings: { ...s.settings, reviewMode: !s.settings.reviewMode } }))
+  }, [])
 
   return (
     <div className="min-h-full bg-slate-950 text-slate-100">
@@ -411,6 +454,9 @@ export default function App() {
           dailyStreak={daily.streak}
           dailyStreakLive={dailyStreakLive}
           dailyDoneToday={dailyDoneToday}
+          reviewMode={settings.reviewMode}
+          reviewCount={reviewCount}
+          onToggleReview={toggleReviewMode}
           onStartDaily={startDaily}
           onExitDaily={exitDaily}
           onSettings={() => setShowSettings(true)}
@@ -435,23 +481,27 @@ export default function App() {
               onChangeSettings={() => setShowSettings(true)}
               onExitDaily={exitDaily}
             />
-          ) : (
-            question && (
-              <QuestionView
-                question={question}
-                phase={phase}
-                picked={picked}
-                input={input}
-                onInputChange={setInput}
-                onChoice={handleChoice}
-                onSubmit={submitInput}
-                onSkip={skip}
-                onNext={goNext}
-                lastCorrect={lastCorrect}
-                inputRef={inputRef}
-              />
-            )
-          )}
+          ) : question ? (
+            <QuestionView
+              question={question}
+              phase={phase}
+              picked={picked}
+              input={input}
+              onInputChange={setInput}
+              onChoice={handleChoice}
+              onSubmit={submitInput}
+              onSkip={skip}
+              onNext={goNext}
+              lastCorrect={lastCorrect}
+              inputRef={inputRef}
+            />
+          ) : appMode === 'normal' && settings.reviewMode ? (
+            <EmptyReview
+              onExit={() =>
+                setState((s) => ({ ...s, settings: { ...s.settings, reviewMode: false } }))
+              }
+            />
+          ) : null}
         </main>
 
         <Footer />
@@ -464,6 +514,24 @@ export default function App() {
           onChange={(s) => setState((prev) => ({ ...prev, settings: s }))}
         />
       )}
+    </div>
+  )
+}
+
+function EmptyReview({ onExit }: { onExit: () => void }) {
+  return (
+    <div className="rounded-2xl bg-emerald-500/10 p-6 text-center ring-1 ring-emerald-500/30">
+      <div className="text-3xl">🎉</div>
+      <div className="mt-2 text-lg font-semibold text-white">弱点なし！</div>
+      <p className="mt-1 text-sm text-emerald-100/80">
+        復習対象の問題はもうありません。通常モードに戻りましょう。
+      </p>
+      <button
+        onClick={onExit}
+        className="mt-4 rounded-md bg-white px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-100"
+      >
+        通常モードに戻る
+      </button>
     </div>
   )
 }
@@ -620,6 +688,9 @@ function Header({
   dailyStreak,
   dailyStreakLive,
   dailyDoneToday,
+  reviewMode,
+  reviewCount,
+  onToggleReview,
   onStartDaily,
   onExitDaily,
 }: {
@@ -631,6 +702,9 @@ function Header({
   dailyStreak: number
   dailyStreakLive: boolean
   dailyDoneToday: boolean
+  reviewMode: boolean
+  reviewCount: number
+  onToggleReview: () => void
   onStartDaily: () => void
   onExitDaily: () => void
 }) {
@@ -638,6 +712,7 @@ function Header({
   const dailyLabel = dailyDoneToday ? '🔥 今日クリア済' : '🔥 今日のクイズ'
   const streakBadge =
     dailyStreakLive && dailyStreak > 0 ? `${dailyStreak}日連続` : null
+  const showReviewToggle = !isDaily && (reviewMode || reviewCount > 0)
 
   return (
     <header className="flex items-center justify-between gap-3">
@@ -660,23 +735,42 @@ function Header({
             ← 通常モード
           </button>
         ) : (
-          <button
-            onClick={onStartDaily}
-            className={
-              'rounded-md px-2.5 py-1.5 text-xs ring-1 ' +
-              (dailyDoneToday
-                ? 'bg-slate-900 text-slate-300 ring-slate-700 hover:bg-slate-800'
-                : 'bg-amber-500/15 text-amber-200 ring-amber-500/40 hover:bg-amber-500/25')
-            }
-            title="今日のクイズを始める"
-          >
-            {dailyLabel}
-            {streakBadge && (
-              <span className="ml-1 rounded-full bg-amber-500/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">
-                {streakBadge}
-              </span>
+          <>
+            {showReviewToggle && (
+              <button
+                onClick={onToggleReview}
+                className={
+                  'rounded-md px-2.5 py-1.5 text-xs ring-1 ' +
+                  (reviewMode
+                    ? 'bg-rose-500/20 text-rose-200 ring-rose-500/40 hover:bg-rose-500/30'
+                    : 'bg-slate-900 text-slate-300 ring-slate-700 hover:bg-slate-800')
+                }
+                title={reviewMode ? '通常モードに戻る' : '間違えた問題だけを出題'}
+              >
+                {reviewMode ? '✓ 復習中' : '🔄 復習'}
+                <span className="ml-1 rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-200">
+                  {reviewCount}
+                </span>
+              </button>
             )}
-          </button>
+            <button
+              onClick={onStartDaily}
+              className={
+                'rounded-md px-2.5 py-1.5 text-xs ring-1 ' +
+                (dailyDoneToday
+                  ? 'bg-slate-900 text-slate-300 ring-slate-700 hover:bg-slate-800'
+                  : 'bg-amber-500/15 text-amber-200 ring-amber-500/40 hover:bg-amber-500/25')
+              }
+              title="今日のクイズを始める"
+            >
+              {dailyLabel}
+              {streakBadge && (
+                <span className="ml-1 rounded-full bg-amber-500/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-100">
+                  {streakBadge}
+                </span>
+              )}
+            </button>
+          </>
         )}
         <button
           onClick={onSettings}
