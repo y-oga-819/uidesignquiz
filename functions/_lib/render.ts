@@ -104,14 +104,14 @@ export const renderOgHtml = (p: SharePayload): string => {
   // visually orbit it. Endless swaps "/N" for "問".
   const hero = isEndless
     ? `
-      <div style="display:flex;align-self:flex-end;align-items:baseline;color:#ffffff;font-weight:800;">
+      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
         <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
         <div style="display:flex;font-size:72px;color:#cbd5e1;margin-left:16px;">問</div>
         <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
       </div>
     `
     : `
-      <div style="display:flex;align-self:flex-end;align-items:baseline;color:#ffffff;font-weight:800;">
+      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
         <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
         <div style="display:flex;font-size:96px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
         <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
@@ -120,6 +120,8 @@ export const renderOgHtml = (p: SharePayload): string => {
 
   // Left-bottom meta block: stopwatch time, plus the attempt count for
   // endless mode where the right-hero number already shows "correct" only.
+  // The first line shares the bottom row with the hero so its baseline
+  // lines up with the big number.
   const meta = isEndless
     ? `
       <div style="display:flex;flex-direction:column;gap:8px;color:#cbd5e1;font-size:36px;">
@@ -131,19 +133,25 @@ export const renderOgHtml = (p: SharePayload): string => {
       <div style="display:flex;align-items:center;gap:10px;color:#cbd5e1;font-size:36px;">⏱ ${escapeHtml(time)}</div>
     `
 
+  // Body splits into a top stack (eyebrow / headline / badges) and a
+  // bottom row that places the meta block and the hero on a shared
+  // baseline. align-items: baseline on the bottom row is what gets the
+  // "8" and "1:12" to land on the same text-bottom — otherwise the
+  // descender depth of the big font pushes the number visually higher
+  // than the small meta line, even if both containers are flush-bottom.
   const template = `
 <div style="display:flex;width:1200px;height:630px;background:#0b1020;padding:48px;font-family:'Noto Sans JP';color:#e2e8f0;">
   <div style="display:flex;flex-direction:column;box-sizing:border-box;width:100%;height:100%;padding:48px 64px;border-radius:32px;background:${tone.bg};border:2px solid ${tone.ring};">
-    <div style="display:flex;flex:1 1 0%;justify-content:space-between;align-items:stretch;gap:32px;">
-      <div style="display:flex;flex-direction:column;justify-content:space-between;flex:1 1 0%;min-width:0;">
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          <div style="display:flex;font-size:30px;font-weight:700;color:${tone.eyebrow};letter-spacing:1px;">${escapeHtml(eyebrow)}</div>
-          <div style="display:flex;color:#ffffff;font-size:64px;font-weight:700;line-height:1.1;">${escapeHtml(tone.headline)}</div>
-          ${badgesHtml}
-        </div>
-        ${meta}
+    <div style="display:flex;flex-direction:column;flex:1 1 0%;justify-content:space-between;gap:24px;">
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;font-size:30px;font-weight:700;color:${tone.eyebrow};letter-spacing:1px;">${escapeHtml(eyebrow)}</div>
+        <div style="display:flex;color:#ffffff;font-size:64px;font-weight:700;line-height:1.1;">${escapeHtml(tone.headline)}</div>
+        ${badgesHtml}
       </div>
-      ${hero}
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:32px;">
+        ${meta}
+        ${hero}
+      </div>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;color:#94a3b8;font-size:30px;border-top:2px solid rgba(148,163,184,0.20);padding-top:20px;margin-top:24px;">
       <div style="display:flex;font-weight:700;color:#e2e8f0;">UI Design Quiz</div>
