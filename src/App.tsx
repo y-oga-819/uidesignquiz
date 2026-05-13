@@ -36,7 +36,7 @@ type AppMode = 'normal' | 'daily'
 
 const ALL_MODES: Mode[] = ['name-to-ui', 'ui-to-name', 'input-name']
 
-const DAILY_LENGTH = 20
+const DAILY_LENGTH = 10
 
 const MODE_LABEL: Record<Mode, string> = {
   'name-to-ui': '名前→UI',
