@@ -29,6 +29,22 @@ npm run preview  # ビルド成果物を確認
 スタック: Vite + React + TypeScript + Tailwind CSS v4。
 ビルド成果物 (`dist/`) はそのまま Cloudflare Pages 等の静的ホスティングに乗せられる。
 
+## Xシェア & OGP
+
+リザルト画面に「𝕏 でシェア」ボタンを置いていて、押すと X (旧Twitter) の投稿画面が
+モード別の文言と `/r?d=<base64url>` 形式のURLで開く。URLを踏んだ人には専用の
+「シェアされたスコア」ページが表示され、「挑戦してみる」CTAから当該モードで
+自分のセッションを始められる。
+
+OGP画像と `<meta>` タグの注入は `functions/` 下の Cloudflare Pages Functions が担当する：
+
+- `functions/og.ts` → `/og?d=...` で OGP用PNGを動的生成（`workers-og` + Twemoji）
+- `functions/r/index.ts` → `/r?d=...` のHTMLに `og:image` 等を埋め込む
+- フォントは Noto Sans JP を Google Fonts CDN から固定文字セットでサブセット化
+
+ローカルで Functions を動かすには `wrangler pages dev dist` を使う。Cloudflare Pages
+の Free プランで動作する想定（OGP画像はエッジで1年キャッシュされる）。
+
 ## UIパーツの追加
 
 `src/parts/previews.tsx` にプレビュー用Reactコンポーネントを追加し、

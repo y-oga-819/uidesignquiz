@@ -24,6 +24,12 @@ import {
   type Stats,
 } from './quiz/engine'
 import type { Part } from './parts/types'
+import {
+  buildShareText,
+  buildShareUrl,
+  buildXIntent,
+  type SharePayload,
+} from './share/payload'
 
 type Phase = 'answering' | 'reveal' | 'result'
 type AppMode = 'normal' | 'daily'
@@ -44,7 +50,8 @@ const SESSION_LENGTH_OPTIONS: { value: SessionLength; label: string }[] = [
   { value: 'infinite', label: '無限' },
 ]
 
-type Bests = Partial<Record<10 | 20, number>>
+type BestRecord = { accuracy: number; fastestMs?: number }
+type Bests = Partial<Record<10 | 20, BestRecord>>
 
 type DailyRecord = {
   date: string
@@ -70,7 +77,9 @@ type SessionResult =
       kind: 'session'
       length: 10 | 20
       isBest: boolean
+      isBestTime: boolean
       prevBest?: number
+      prevFastestMs?: number
     })
   | (SessionResultBase & {
       kind: 'daily'
@@ -78,6 +87,9 @@ type SessionResult =
       alreadyDone: boolean
       newStreak: number
       prevStreak: number
+    })
+  | (SessionResultBase & {
+      kind: 'endless'
     })
 
 const STORAGE_KEY = 'uidq.v1'
@@ -99,6 +111,26 @@ const DEFAULT_SETTINGS: Settings = {
 
 const DEFAULT_DAILY: DailyState = { lastCompleted: null, streak: 0 }
 
+// Migrate legacy `bests: { 10: 80 }` (accuracy-only number) into the new
+// record shape `{ 10: { accuracy: 80 } }` on load.
+const normalizeBests = (raw: unknown): Bests => {
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Bests = {}
+  for (const key of [10, 20] as const) {
+    const v = (raw as Record<string, unknown>)[String(key)]
+    if (typeof v === 'number') {
+      out[key] = { accuracy: v }
+    } else if (v && typeof v === 'object') {
+      const obj = v as Record<string, unknown>
+      const accuracy = typeof obj.accuracy === 'number' ? obj.accuracy : undefined
+      if (accuracy === undefined) continue
+      const fastestMs = typeof obj.fastestMs === 'number' ? obj.fastestMs : undefined
+      out[key] = fastestMs === undefined ? { accuracy } : { accuracy, fastestMs }
+    }
+  }
+  return out
+}
+
 const loadPersisted = (): Persisted => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -108,7 +140,7 @@ const loadPersisted = (): Persisted => {
     return {
       settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
       stats: parsed.stats ?? initialStats,
-      bests: parsed.bests ?? {},
+      bests: normalizeBests(parsed.bests),
       daily: parsed.daily ?? DEFAULT_DAILY,
       partStats: parsed.partStats ?? initialPartStats,
     }
@@ -282,6 +314,35 @@ export default function App() {
     )
   }, [settings, stats, bests, daily, partStats])
 
+  // Handle `?start=` on first mount. Used by the SharedScoreView CTA to drop
+  // a viewer straight into the appropriate mode after they tap "挑戦してみる".
+  // The setState-in-effect rule fires here, but the dispatch is a legitimate
+  // one-shot mount action (URL params are external state we read into React).
+  const autostartRef = useRef(false)
+  useEffect(() => {
+    if (autostartRef.current) return
+    autostartRef.current = true
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const start = params.get('start')
+    if (!start) return
+    window.history.replaceState({}, '', window.location.pathname)
+    if (start === 'daily') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      startDaily()
+    } else if (start === '10' || start === '20') {
+      setState((s) => ({
+        ...s,
+        settings: { ...s.settings, sessionLength: Number(start) as 10 | 20 },
+      }))
+    } else if (start === 'infinite') {
+      setState((s) => ({
+        ...s,
+        settings: { ...s.settings, sessionLength: 'infinite' },
+      }))
+    }
+  }, [startDaily])
+
   // focus input when input mode comes up — only on devices with a fine pointer
   // (desktop). On touch devices this would force the on-screen keyboard up
   // before the user has had a chance to read the question.
@@ -349,10 +410,20 @@ export default function App() {
       const correct = session.correct
       const accuracy = Math.round((correct / total) * 100)
       const durationMs = Date.now() - session.startedAt
-      const prevBest = bests[total]
+      const prev = bests[total]
+      const prevBest = prev?.accuracy
+      const prevFastestMs = prev?.fastestMs
       const isBest = prevBest === undefined || accuracy > prevBest
-      if (isBest) {
-        setState((s) => ({ ...s, bests: { ...s.bests, [total]: accuracy } }))
+      const isPerfect = accuracy === 100
+      const isBestTime =
+        isPerfect && (prevFastestMs === undefined || durationMs < prevFastestMs)
+      if (isBest || isBestTime) {
+        const nextRecord: BestRecord = {
+          accuracy: isBest ? accuracy : (prevBest ?? accuracy),
+          fastestMs: isBestTime ? durationMs : prevFastestMs,
+        }
+        if (nextRecord.fastestMs === undefined) delete nextRecord.fastestMs
+        setState((s) => ({ ...s, bests: { ...s.bests, [total]: nextRecord } }))
       }
       setLastResult({
         kind: 'session',
@@ -362,13 +433,35 @@ export default function App() {
         accuracy,
         durationMs,
         isBest,
+        isBestTime,
         prevBest,
+        prevFastestMs,
       })
       setPhase('result')
       return
     }
     next()
   }, [appMode, dailyQuestions, dailyAlreadyDone, session, bests, daily, today, next, showQuestion])
+
+  // End an endless session early and show the result/share screen. We never
+  // reach this branch from goNext (endless never auto-completes), so it lives
+  // as its own callback bound to a UI button in QuestionView.
+  const finishEndless = useCallback(() => {
+    if (session.length !== 'infinite') return
+    const correct = session.correct
+    const total = session.answered
+    if (total === 0) return // nothing to share
+    const accuracy = Math.round((correct / total) * 100)
+    const durationMs = Date.now() - session.startedAt
+    setLastResult({
+      kind: 'endless',
+      correct,
+      total,
+      accuracy,
+      durationMs,
+    })
+    setPhase('result')
+  }, [session])
 
   const handleChoice = useCallback(
     (id: string) => {
@@ -480,6 +573,16 @@ export default function App() {
           {phase !== 'result' && session.length !== 'infinite' && (
             <SessionProgress session={session} />
           )}
+
+          {phase !== 'result' &&
+            session.length === 'infinite' &&
+            session.answered > 0 && (
+              <EndlessControls
+                answered={session.answered}
+                correct={session.correct}
+                onFinish={finishEndless}
+              />
+            )}
 
           {phase === 'result' && lastResult ? (
             <ResultView
@@ -737,8 +840,15 @@ function ResultView({
         ? { ring: 'ring-indigo-500/40', bg: 'bg-indigo-500/10', text: 'text-indigo-300', headline: 'いい調子！' }
         : { ring: 'ring-amber-500/40', bg: 'bg-amber-500/10', text: 'text-amber-300', headline: 'もう一回いこう' }
 
-  const isDaily = result.kind === 'daily'
-  const eyebrow = isDaily ? `今日のクイズ (${result.date}) 完了` : `${result.length}問チャレンジ 完了`
+  const eyebrow =
+    result.kind === 'daily'
+      ? `今日のクイズ (${result.date}) 完了`
+      : result.kind === 'endless'
+        ? 'エンドレスモード 終了'
+        : `${result.length}問チャレンジ 完了`
+
+  const sharePayload = buildResultPayload(result)
+  const badgeLabels = collectBadges(result)
 
   return (
     <div className="flex flex-col gap-5">
@@ -753,15 +863,17 @@ function ResultView({
             <span className="text-2xl text-slate-400">/{result.total}</span>
           </div>
           <div className="pb-1 text-sm text-slate-300">正解</div>
-          {result.kind === 'session' && result.isBest && (
-            <span className="ml-auto rounded-full bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-400/40">
-              ★ ベスト更新
-            </span>
-          )}
-          {result.kind === 'daily' && !result.alreadyDone && result.newStreak > result.prevStreak && (
-            <span className="ml-auto rounded-full bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-400/40">
-              🔥 連続+1
-            </span>
+          {badgeLabels.length > 0 && (
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+              {badgeLabels.map((label) => (
+                <span
+                  key={label}
+                  className="rounded-full bg-amber-400/20 px-3 py-1 text-xs font-semibold text-amber-300 ring-1 ring-amber-400/40"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
           )}
           {result.kind === 'daily' && result.alreadyDone && (
             <span className="ml-auto rounded-full bg-slate-700/40 px-3 py-1 text-xs font-medium text-slate-300 ring-1 ring-slate-600/40">
@@ -783,8 +895,10 @@ function ResultView({
                     : '—'
               }
             />
-          ) : (
+          ) : result.kind === 'daily' ? (
             <ResultStat label="連続日数" value={`${result.newStreak}日`} />
+          ) : (
+            <ResultStat label="挑戦数" value={`${result.total}問`} />
           )}
         </div>
         {result.kind === 'daily' && !result.alreadyDone && (
@@ -799,6 +913,9 @@ function ResultView({
         >
           もう一回 ↵
         </button>
+        {sharePayload && (
+          <ShareButton payload={sharePayload} badges={badgeLabels} />
+        )}
         {result.kind === 'daily' ? (
           <button
             onClick={onExitDaily}
@@ -815,6 +932,96 @@ function ResultView({
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+// Map a SessionResult into the share payload shape. Returns null for
+// nothing-to-share (e.g. endless with 0 answers).
+function buildResultPayload(result: SessionResult): SharePayload | null {
+  const durationSec = Math.round(result.durationMs / 1000)
+  if (result.kind === 'session') {
+    let b = ''
+    if (result.isBest) b += 'a'
+    if (result.isBestTime) b += 'b'
+    return {
+      m: 's',
+      s: result.correct,
+      t: result.total,
+      d: durationSec,
+      ...(b ? { b } : {}),
+    }
+  }
+  if (result.kind === 'daily') {
+    return {
+      m: 'd',
+      s: result.correct,
+      t: result.total,
+      d: durationSec,
+      dt: result.date,
+    }
+  }
+  if (result.total === 0) return null
+  return {
+    m: 'e',
+    s: result.correct,
+    t: result.total,
+    d: durationSec,
+  }
+}
+
+function collectBadges(result: SessionResult): string[] {
+  const out: string[] = []
+  if (result.kind === 'session') {
+    if (result.isBest) out.push('★ ベスト更新')
+    if (result.isBestTime) out.push('⚡ 最速更新')
+  } else if (result.kind === 'daily') {
+    if (!result.alreadyDone && result.newStreak > result.prevStreak) {
+      out.push(`🔥 連続 ${result.newStreak}日`)
+    }
+  }
+  return out
+}
+
+function ShareButton({ payload, badges }: { payload: SharePayload; badges: string[] }) {
+  const onClick = useCallback(() => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    const url = buildShareUrl(origin, payload)
+    const text = buildShareText(payload, badges)
+    window.open(buildXIntent(text, url), '_blank', 'noopener,noreferrer')
+  }, [payload, badges])
+  return (
+    <button
+      onClick={onClick}
+      className="flex-1 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-slate-100 ring-1 ring-slate-700 hover:bg-slate-800"
+      title="X (旧Twitter) で結果をシェア"
+    >
+      𝕏 でシェア
+    </button>
+  )
+}
+
+function EndlessControls({
+  answered,
+  correct,
+  onFinish,
+}: {
+  answered: number
+  correct: number
+  onFinish: () => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-900 px-3 py-2 ring-1 ring-slate-800">
+      <div className="flex items-baseline gap-2 text-xs text-slate-300">
+        <span className="tabular-nums text-base font-semibold text-white">{correct}</span>
+        <span className="text-slate-400">/ {answered} 正解</span>
+      </div>
+      <button
+        onClick={onFinish}
+        className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+      >
+        終了してシェア
+      </button>
     </div>
   )
 }
