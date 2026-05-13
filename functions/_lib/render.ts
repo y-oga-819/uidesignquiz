@@ -92,14 +92,20 @@ export const renderOgHtml = (p: SharePayload): string => {
           )
           .join('')}</div>`
 
+  // NOTE: every leaf <div> must declare display:flex even when it only
+  // contains text. workers-og's parseHtml uses HTMLRewriter, which streams
+  // text() events in chunks (especially across multi-byte boundaries), and
+  // each chunk lands in Satori as a separate child. A "single-text" div can
+  // therefore arrive at Satori with multiple children — and Satori rejects
+  // multi-child divs that don't have an explicit display.
   const scoreBlock = isEndless
     ? `
       <div style="display:flex;align-items:flex-end;gap:24px;margin-top:36px;">
         <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-          <div style="font-size:64px;color:#cbd5e1;margin-left:16px;">問</div>
+          <div style="display:flex;font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+          <div style="display:flex;font-size:64px;color:#cbd5e1;margin-left:16px;">問</div>
         </div>
-        <div style="font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
+        <div style="display:flex;font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
       </div>
       <div style="display:flex;align-items:center;gap:32px;margin-top:32px;color:#cbd5e1;font-size:40px;">
         <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
@@ -109,10 +115,10 @@ export const renderOgHtml = (p: SharePayload): string => {
     : `
       <div style="display:flex;align-items:flex-end;gap:24px;margin-top:36px;">
         <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-          <div style="font-size:96px;color:#94a3b8;margin-left:4px;">/${total.value}${total.suffix}</div>
+          <div style="display:flex;font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+          <div style="display:flex;font-size:96px;color:#94a3b8;margin-left:4px;">/${total.value}${total.suffix}</div>
         </div>
-        <div style="font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
+        <div style="display:flex;font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
       </div>
       <div style="display:flex;align-items:center;margin-top:32px;color:#cbd5e1;font-size:44px;">
         <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
