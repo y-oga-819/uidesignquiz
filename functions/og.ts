@@ -10,9 +10,8 @@ const HEIGHT = 630
 const CACHE_HEADER = 'public, max-age=31536000, immutable, s-maxage=31536000'
 
 const fallback = (): Response => {
-  // Minimal SVG fallback for malformed payloads. Sent as PNG-equivalent
-  // image/svg+xml — most crawlers accept SVG OG images, and the SVG path
-  // never invokes the heavy WASM pipeline.
+  // Minimal SVG fallback for malformed payloads or rendering failures.
+  // Render errors are logged to console.error → Cloudflare real-time logs.
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}">
   <rect width="100%" height="100%" fill="#0b1020"/>

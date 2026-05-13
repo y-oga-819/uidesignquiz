@@ -83,59 +83,91 @@ export const renderOgHtml = (p: SharePayload): string => {
   const badgesHtml =
     badges.length === 0
       ? ''
-      : `<div style="display:flex;gap:16px;">${badges
+      : `<div style="display:flex;gap:12px;margin-top:4px;">${badges
           .map(
             (b) =>
-              `<div style="display:flex;align-items:center;padding:10px 22px;border-radius:9999px;background:rgba(251,191,36,0.18);color:#fcd34d;font-size:28px;font-weight:700;border:2px solid rgba(251,191,36,0.40);">${escapeHtml(
+              `<div style="display:flex;align-items:center;padding:6px 16px;border-radius:9999px;background:rgba(251,191,36,0.18);color:#fcd34d;font-size:24px;font-weight:700;border:2px solid rgba(251,191,36,0.40);">${escapeHtml(
                 b,
               )}</div>`,
           )
           .join('')}</div>`
 
-  const scoreBlock = isEndless
+  // NOTE: every leaf <div> must declare display:flex even when it only
+  // contains text. workers-og's parseHtml uses HTMLRewriter, which streams
+  // text() events in chunks (especially across multi-byte boundaries), and
+  // each chunk lands in Satori as a separate child. A "single-text" div can
+  // therefore arrive at Satori with multiple children — and Satori rejects
+  // multi-child divs that don't have an explicit display.
+
+  // Right-side hero: the score on a single baseline row so the big number
+  // sits closer to the optical center of the card and the supporting glyphs
+  // visually orbit it. Endless swaps "/N" for "問".
+  const hero = isEndless
     ? `
-      <div style="display:flex;align-items:flex-end;gap:24px;margin-top:36px;">
-        <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-          <div style="font-size:64px;color:#cbd5e1;margin-left:16px;">問</div>
-        </div>
-        <div style="font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:32px;margin-top:32px;color:#cbd5e1;font-size:40px;">
-        <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
-        <div style="display:flex;align-items:center;">挑戦 ${total.value}${total.suffix}問</div>
+      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
+        <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+        <div style="display:flex;font-size:72px;color:#cbd5e1;margin-left:16px;">問</div>
+        <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
       </div>
     `
     : `
-      <div style="display:flex;align-items:flex-end;gap:24px;margin-top:36px;">
-        <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-          <div style="font-size:96px;color:#94a3b8;margin-left:4px;">/${total.value}${total.suffix}</div>
-        </div>
-        <div style="font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
-      </div>
-      <div style="display:flex;align-items:center;margin-top:32px;color:#cbd5e1;font-size:44px;">
-        <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
+      <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
+        <div style="display:flex;font-size:260px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+        <div style="display:flex;font-size:96px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
+        <div style="display:flex;font-size:44px;color:#cbd5e1;font-weight:400;margin-left:24px;">正解</div>
       </div>
     `
 
-  return `
+  // Left-bottom meta block: stopwatch time, plus the attempt count for
+  // endless mode where the right-hero number already shows "correct" only.
+  // The first line shares the bottom row with the hero so its baseline
+  // lines up with the big number.
+  const meta = isEndless
+    ? `
+      <div style="display:flex;flex-direction:column;gap:8px;color:#cbd5e1;font-size:36px;">
+        <div style="display:flex;align-items:center;gap:10px;">⏱ ${escapeHtml(time)}</div>
+        <div style="display:flex;">挑戦 ${total.value}${total.suffix}問</div>
+      </div>
+    `
+    : `
+      <div style="display:flex;align-items:center;gap:10px;color:#cbd5e1;font-size:36px;">⏱ ${escapeHtml(time)}</div>
+    `
+
+  // Body splits into a top stack (eyebrow / headline / badges) and a
+  // bottom row that places the meta block and the hero on a shared
+  // baseline. align-items: baseline on the bottom row is what gets the
+  // "8" and "1:12" to land on the same text-bottom — otherwise the
+  // descender depth of the big font pushes the number visually higher
+  // than the small meta line, even if both containers are flush-bottom.
+  const template = `
 <div style="display:flex;width:1200px;height:630px;background:#0b1020;padding:48px;font-family:'Noto Sans JP';color:#e2e8f0;">
-  <div style="display:flex;flex-direction:column;width:100%;height:100%;padding:56px 64px;border-radius:32px;background:${tone.bg};border:2px solid ${tone.ring};">
-    <div style="display:flex;align-items:center;justify-content:space-between;">
-      <div style="display:flex;font-size:30px;font-weight:700;color:${tone.eyebrow};letter-spacing:1px;">${escapeHtml(eyebrow)}</div>
-      ${badgesHtml}
+  <div style="display:flex;flex-direction:column;box-sizing:border-box;width:100%;height:100%;padding:48px 64px;border-radius:32px;background:${tone.bg};border:2px solid ${tone.ring};">
+    <div style="display:flex;flex-direction:column;flex:1 1 0%;justify-content:space-between;gap:24px;">
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;font-size:30px;font-weight:700;color:${tone.eyebrow};letter-spacing:1px;">${escapeHtml(eyebrow)}</div>
+        <div style="display:flex;color:#ffffff;font-size:64px;font-weight:700;line-height:1.1;">${escapeHtml(tone.headline)}</div>
+        ${badgesHtml}
+      </div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:32px;">
+        ${meta}
+        ${hero}
+      </div>
     </div>
-    <div style="display:flex;color:#ffffff;font-size:48px;font-weight:700;margin-top:8px;">${escapeHtml(tone.headline)}</div>
-    ${scoreBlock}
-    <div style="display:flex;flex:1;"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;color:#94a3b8;font-size:32px;border-top:2px solid rgba(148,163,184,0.20);padding-top:24px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;color:#94a3b8;font-size:30px;border-top:2px solid rgba(148,163,184,0.20);padding-top:20px;margin-top:24px;">
       <div style="display:flex;font-weight:700;color:#e2e8f0;">UI Design Quiz</div>
-      <div style="display:flex;font-size:24px;">UIパーツの名前を覚えるクイズ</div>
+      <div style="display:flex;font-size:22px;">UIパーツの名前を覚えるクイズ</div>
     </div>
   </div>
 </div>
-  `.trim()
+  `
+  // Strip whitespace between tags. workers-og's HTMLRewriter-based parser
+  // emits every text node (including inter-tag indentation) as a Satori
+  // child, so the original indented source ends up looking like
+  // [ws, <div>, ws] to flexbox — which breaks justify-content and other
+  // distributions. Collapsing the source to a single line removes those
+  // stray whitespace children without sacrificing readability of the
+  // template above.
+  return template.replace(/>\s+</g, '><').trim()
 }
 
 // Fixed character set used to subset Noto Sans JP via Google Fonts. Kept
@@ -143,7 +175,7 @@ export const renderOgHtml = (p: SharePayload): string => {
 // distinct `text` param produces a different Google Fonts URL.
 export const FONT_TEXT = [
   '0123456789',
-  '/:()+',
+  '/:()+！',
   'お見事いい調子もう一回いこう',
   'いっぱい解いた',
   '完了問正解所要時間ベスト連続日チャレンジ',
@@ -151,5 +183,5 @@ export const FONT_TEXT = [
   '最速更新挑戦',
   '日月火水木金土',
   'UIDesignQuiz',
-  'パーツ名前覚えるクイズアプリ',
+  'パーツ名前を覚えるクイズアプリ',
 ].join('')
