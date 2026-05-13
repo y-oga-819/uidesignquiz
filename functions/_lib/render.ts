@@ -83,10 +83,10 @@ export const renderOgHtml = (p: SharePayload): string => {
   const badgesHtml =
     badges.length === 0
       ? ''
-      : `<div style="display:flex;gap:16px;">${badges
+      : `<div style="display:flex;gap:12px;margin-top:4px;">${badges
           .map(
             (b) =>
-              `<div style="display:flex;align-items:center;padding:10px 22px;border-radius:9999px;background:rgba(251,191,36,0.18);color:#fcd34d;font-size:28px;font-weight:700;border:2px solid rgba(251,191,36,0.40);">${escapeHtml(
+              `<div style="display:flex;align-items:center;padding:6px 16px;border-radius:9999px;background:rgba(251,191,36,0.18);color:#fcd34d;font-size:24px;font-weight:700;border:2px solid rgba(251,191,36,0.40);">${escapeHtml(
                 b,
               )}</div>`,
           )
@@ -98,46 +98,59 @@ export const renderOgHtml = (p: SharePayload): string => {
   // each chunk lands in Satori as a separate child. A "single-text" div can
   // therefore arrive at Satori with multiple children — and Satori rejects
   // multi-child divs that don't have an explicit display.
-  const scoreBlock = isEndless
+
+  // Right-side hero: big number with the qualifier baseline-aligned, then
+  // the "正解" label underneath. The endless mode swaps "/N" for "問".
+  const hero = isEndless
     ? `
-      <div style="display:flex;align-items:flex-end;gap:24px;margin-top:36px;">
+      <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
         <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="display:flex;font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+          <div style="display:flex;font-size:240px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
           <div style="display:flex;font-size:64px;color:#cbd5e1;margin-left:16px;">問</div>
         </div>
-        <div style="display:flex;font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:32px;margin-top:32px;color:#cbd5e1;font-size:40px;">
-        <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
-        <div style="display:flex;align-items:center;">挑戦 ${total.value}${total.suffix}問</div>
+        <div style="display:flex;font-size:44px;color:#cbd5e1;margin-top:8px;">正解</div>
       </div>
     `
     : `
-      <div style="display:flex;align-items:flex-end;gap:24px;margin-top:36px;">
+      <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
         <div style="display:flex;align-items:baseline;color:#ffffff;font-weight:800;">
-          <div style="display:flex;font-size:280px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
-          <div style="display:flex;font-size:96px;color:#94a3b8;margin-left:4px;">/${total.value}${total.suffix}</div>
+          <div style="display:flex;font-size:240px;line-height:1;letter-spacing:-6px;">${correct.value}${correct.suffix}</div>
+          <div style="display:flex;font-size:88px;color:#94a3b8;margin-left:8px;">/${total.value}${total.suffix}</div>
         </div>
-        <div style="display:flex;font-size:48px;color:#cbd5e1;padding-bottom:24px;">正解</div>
+        <div style="display:flex;font-size:44px;color:#cbd5e1;margin-top:8px;">正解</div>
       </div>
-      <div style="display:flex;align-items:center;margin-top:32px;color:#cbd5e1;font-size:44px;">
-        <div style="display:flex;align-items:center;gap:10px;">所要 ${escapeHtml(time)}</div>
+    `
+
+  // Left-bottom meta block: stopwatch time, plus the attempt count for
+  // endless mode where the right-hero number already shows "correct" only.
+  const meta = isEndless
+    ? `
+      <div style="display:flex;flex-direction:column;gap:8px;color:#cbd5e1;font-size:36px;">
+        <div style="display:flex;align-items:center;gap:10px;">⏱ ${escapeHtml(time)}</div>
+        <div style="display:flex;">挑戦 ${total.value}${total.suffix}問</div>
       </div>
+    `
+    : `
+      <div style="display:flex;align-items:center;gap:10px;color:#cbd5e1;font-size:36px;">⏱ ${escapeHtml(time)}</div>
     `
 
   const template = `
 <div style="display:flex;width:1200px;height:630px;background:#0b1020;padding:48px;font-family:'Noto Sans JP';color:#e2e8f0;">
-  <div style="display:flex;flex-direction:column;width:100%;height:100%;padding:56px 64px;border-radius:32px;background:${tone.bg};border:2px solid ${tone.ring};">
-    <div style="display:flex;align-items:center;justify-content:space-between;">
-      <div style="display:flex;font-size:30px;font-weight:700;color:${tone.eyebrow};letter-spacing:1px;">${escapeHtml(eyebrow)}</div>
-      ${badgesHtml}
+  <div style="display:flex;flex-direction:column;box-sizing:border-box;width:100%;height:100%;padding:48px 64px;border-radius:32px;background:${tone.bg};border:2px solid ${tone.ring};">
+    <div style="display:flex;flex:1 1 0%;justify-content:space-between;align-items:stretch;gap:32px;">
+      <div style="display:flex;flex-direction:column;justify-content:space-between;flex:1 1 0%;min-width:0;">
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;font-size:30px;font-weight:700;color:${tone.eyebrow};letter-spacing:1px;">${escapeHtml(eyebrow)}</div>
+          <div style="display:flex;color:#ffffff;font-size:64px;font-weight:700;line-height:1.1;">${escapeHtml(tone.headline)}</div>
+          ${badgesHtml}
+        </div>
+        ${meta}
+      </div>
+      ${hero}
     </div>
-    <div style="display:flex;color:#ffffff;font-size:48px;font-weight:700;margin-top:8px;">${escapeHtml(tone.headline)}</div>
-    ${scoreBlock}
-    <div style="display:flex;flex:1 1 0%;"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;color:#94a3b8;font-size:32px;border-top:2px solid rgba(148,163,184,0.20);padding-top:24px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;color:#94a3b8;font-size:30px;border-top:2px solid rgba(148,163,184,0.20);padding-top:20px;margin-top:24px;">
       <div style="display:flex;font-weight:700;color:#e2e8f0;">UI Design Quiz</div>
-      <div style="display:flex;font-size:24px;">UIパーツの名前を覚えるクイズ</div>
+      <div style="display:flex;font-size:22px;">UIパーツの名前を覚えるクイズ</div>
     </div>
   </div>
 </div>
