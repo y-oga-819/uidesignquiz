@@ -1141,20 +1141,24 @@ function collectBadges(result: SessionResult): string[] {
 }
 
 function ShareButton({ payload, badges }: { payload: SharePayload; badges: string[] }) {
-  const onClick = useCallback(() => {
+  // An anchor navigation survives mobile popup blockers and in-app browsers
+  // (X / LINE / Instagram WebViews) where window.open is silently blocked.
+  const href = useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
     const url = buildShareUrl(origin, payload)
     const text = buildShareText(payload, badges)
-    window.open(buildXIntent(text, url), '_blank', 'noopener,noreferrer')
+    return buildXIntent(text, url)
   }, [payload, badges])
   return (
-    <button
-      onClick={onClick}
-      className="flex-1 rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-slate-100 ring-1 ring-slate-700 hover:bg-slate-800"
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex flex-1 items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-slate-100 ring-1 ring-slate-700 hover:bg-slate-800"
       title="X (旧Twitter) で結果をシェア"
     >
       𝕏 でシェア
-    </button>
+    </a>
   )
 }
 
